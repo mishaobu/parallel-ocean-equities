@@ -157,7 +157,8 @@ func TestServiceRefreshAllQueuesMacroOnce(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshot := service.Snapshot()
-		if len(snapshot.Macro.Points) == 1 && !service.Stats().MacroRefreshing {
+		stats := service.Stats()
+		if len(snapshot.Macro.Points) == 1 && !stats.MacroRefreshing && stats.QueueDepth == 0 && stats.InFlight == 0 {
 			if snapshot.Macro.Points[0].FedFunds == nil || *snapshot.Macro.Points[0].FedFunds != 4.5 {
 				t.Fatalf("unexpected macro state: %#v", snapshot.Macro)
 			}
