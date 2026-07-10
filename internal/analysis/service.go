@@ -21,32 +21,46 @@ type Analyzer interface {
 }
 
 type Stats struct {
-	RefreshTotal    int64     `json:"refreshTotal"`
-	RefreshFailures int64     `json:"refreshFailures"`
-	QueueDepth      int       `json:"queueDepth"`
-	InFlight        int       `json:"inFlight"`
-	LastRefresh     time.Time `json:"lastRefresh,omitempty"`
+	RefreshTotal     int64     `json:"refreshTotal"`
+	RefreshFailures  int64     `json:"refreshFailures"`
+	QueueDepth       int       `json:"queueDepth"`
+	InFlight         int       `json:"inFlight"`
+	LastRefresh      time.Time `json:"lastRefresh,omitempty"`
+	MacroRefreshing  bool      `json:"macroRefreshing"`
+	MacroLastRefresh time.Time `json:"macroLastRefresh,omitempty"`
+	MacroFailures    int64     `json:"macroFailures"`
 }
 
 type Service struct {
-	store    *store.Store
-	analyzer Analyzer
-	queue    chan string
+	store      *store.Store
+	analyzer   Analyzer
+	queue      chan string
+	macro      MacroAnalyzer
+	macroQueue chan struct{}
 
-	mu       sync.Mutex
-	inflight map[string]struct{}
-	last     time.Time
-	total    atomic.Int64
-	failures atomic.Int64
+	mu            sync.Mutex
+	inflight      map[string]struct{}
+	macroInflight bool
+	last          time.Time
+	macroLast     time.Time
+	total         atomic.Int64
+	failures      atomic.Int64
+	macroFailures atomic.Int64
 }
 
 func NewService(state *store.Store, analyzer Analyzer) *Service {
 	return &Service{
-		store:    state,
-		analyzer: analyzer,
-		queue:    make(chan string, 64),
-		inflight: make(map[string]struct{}),
+		store:      state,
+		analyzer:   analyzer,
+		queue:      make(chan string, 64),
+		macroQueue: make(chan struct{}, 1),
+		inflight:   make(map[string]struct{}),
 	}
+}
+
+func (s *Service) WithMacro(analyzer MacroAnalyzer) *Service {
+	s.macro = analyzer
+	return s
 }
 
 func (s *Service) Start(ctx context.Context, workers int) {
@@ -55,6 +69,9 @@ func (s *Service) Start(ctx context.Context, workers int) {
 	}
 	for range workers {
 		go s.worker(ctx)
+	}
+	if s.macro != nil {
+		go s.macroWorker(ctx)
 	}
 }
 
@@ -104,7 +121,31 @@ func (s *Service) RefreshAll() int {
 			queued++
 		}
 	}
+	s.QueueMacro()
 	return queued
+}
+
+func (s *Service) QueueMacro() bool {
+	if s.macro == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.macroInflight {
+		s.mu.Unlock()
+		return false
+	}
+	s.macroInflight = true
+	s.mu.Unlock()
+
+	select {
+	case s.macroQueue <- struct{}{}:
+		return true
+	default:
+		s.mu.Lock()
+		s.macroInflight = false
+		s.mu.Unlock()
+		return false
+	}
 }
 
 func (s *Service) Snapshot() model.State {
@@ -115,11 +156,14 @@ func (s *Service) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Stats{
-		RefreshTotal:    s.total.Load(),
-		RefreshFailures: s.failures.Load(),
-		QueueDepth:      len(s.queue),
-		InFlight:        len(s.inflight),
-		LastRefresh:     s.last,
+		RefreshTotal:     s.total.Load(),
+		RefreshFailures:  s.failures.Load(),
+		QueueDepth:       len(s.queue),
+		InFlight:         len(s.inflight),
+		LastRefresh:      s.last,
+		MacroRefreshing:  s.macroInflight,
+		MacroLastRefresh: s.macroLast,
+		MacroFailures:    s.macroFailures.Load(),
 	}
 }
 
@@ -131,6 +175,42 @@ func (s *Service) worker(ctx context.Context) {
 		case ticker := <-s.queue:
 			s.refresh(ctx, ticker)
 		}
+	}
+}
+
+func (s *Service) macroWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.macroQueue:
+			s.refreshMacro(ctx)
+		}
+	}
+}
+
+func (s *Service) refreshMacro(parent context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.macroFailures.Add(1)
+			_ = s.store.SetMacroError(fmt.Errorf("macro analysis failed unexpectedly: %v", recovered))
+		}
+		s.mu.Lock()
+		s.macroInflight = false
+		s.macroLast = time.Now().UTC()
+		s.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
+	defer cancel()
+	series, err := s.macro.Analyze(ctx)
+	if err != nil {
+		s.macroFailures.Add(1)
+		_ = s.store.SetMacroError(err)
+		return
+	}
+	if err := s.store.SetMacro(series); err != nil {
+		s.macroFailures.Add(1)
 	}
 }
 

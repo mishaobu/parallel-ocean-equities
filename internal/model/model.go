@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 2
+const StateVersion = 3
 
 type AnnualPoint struct {
 	FiscalYear int      `json:"fiscalYear"`
@@ -78,6 +78,47 @@ type ValuationMetrics struct {
 	ForwardDividendToFCF   *float64 `json:"forwardDividendToFcf,omitempty"`
 }
 
+type ValuationPoint struct {
+	Date                   string   `json:"date"`
+	PE                     *float64 `json:"pe,omitempty"`
+	ForwardPE              *float64 `json:"forwardPe,omitempty"`
+	EVToEBITDA             *float64 `json:"evToEbitda,omitempty"`
+	ForwardEVToEBITDA      *float64 `json:"forwardEvToEbitda,omitempty"`
+	EVToEBIT               *float64 `json:"evToEbit,omitempty"`
+	ForwardEVToEBIT        *float64 `json:"forwardEvToEbit,omitempty"`
+	FCFToMarketCap         *float64 `json:"fcfToMarketCap,omitempty"`
+	ForwardFCFToMarketCap  *float64 `json:"forwardFcfToMarketCap,omitempty"`
+	FCFToEV                *float64 `json:"fcfToEv,omitempty"`
+	ForwardFCFToEV         *float64 `json:"forwardFcfToEv,omitempty"`
+	NetDebtToEBITDA        *float64 `json:"netDebtToEbitda,omitempty"`
+	ForwardNetDebtToEBITDA *float64 `json:"forwardNetDebtToEbitda,omitempty"`
+	DividendToFCF          *float64 `json:"dividendToFcf,omitempty"`
+	ForwardDividendToFCF   *float64 `json:"forwardDividendToFcf,omitempty"`
+}
+
+type MacroPoint struct {
+	Date            string   `json:"date"`
+	Inflation       *float64 `json:"inflation,omitempty"`
+	FedFunds        *float64 `json:"fedFunds,omitempty"`
+	Treasury2Y      *float64 `json:"treasury2Y,omitempty"`
+	Treasury10Y     *float64 `json:"treasury10Y,omitempty"`
+	RealPolicyRate  *float64 `json:"realPolicyRate,omitempty"`
+	YieldCurve      *float64 `json:"yieldCurve,omitempty"`
+	LogM1           *float64 `json:"logM1,omitempty"`
+	LogM2           *float64 `json:"logM2,omitempty"`
+	LogFedAssets    *float64 `json:"logFedAssets,omitempty"`
+	M1Growth        *float64 `json:"m1Growth,omitempty"`
+	M2Growth        *float64 `json:"m2Growth,omitempty"`
+	CorporateSpread *float64 `json:"corporateSpread,omitempty"`
+}
+
+type MacroSeries struct {
+	UpdatedAt time.Time    `json:"updatedAt,omitempty"`
+	Sources   []string     `json:"sources,omitempty"`
+	Error     string       `json:"error,omitempty"`
+	Points    []MacroPoint `json:"points,omitempty"`
+}
+
 type ForecastModel struct {
 	Horizon           string   `json:"horizon,omitempty"`
 	Method            string   `json:"method,omitempty"`
@@ -135,12 +176,14 @@ type Equity struct {
 	Valuation   ValuationMetrics `json:"valuation"`
 	Forecast    ForecastModel    `json:"forecast"`
 	Models      ValuationModels  `json:"models"`
+	Valuations  []ValuationPoint `json:"valuations,omitempty"`
 }
 
 type State struct {
 	Version   int                `json:"version"`
 	UpdatedAt time.Time          `json:"updatedAt"`
 	Tickers   map[string]*Equity `json:"tickers"`
+	Macro     MacroSeries        `json:"macro"`
 }
 
 func NewState() State {

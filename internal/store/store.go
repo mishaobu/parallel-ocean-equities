@@ -148,6 +148,25 @@ func (s *Store) SetError(ticker string, refreshErr error) error {
 	})
 }
 
+func (s *Store) SetMacro(series model.MacroSeries) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	series.Error = ""
+	if series.UpdatedAt.IsZero() {
+		series.UpdatedAt = time.Now().UTC()
+	}
+	s.state.Macro = series
+	return s.saveLocked()
+}
+
+func (s *Store) SetMacroError(refreshErr error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.Macro.Error = refreshErr.Error()
+	s.state.Macro.UpdatedAt = time.Now().UTC()
+	return s.saveLocked()
+}
+
 func (s *Store) Tickers() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

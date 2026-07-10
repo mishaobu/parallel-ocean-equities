@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,21 +34,30 @@ func (p *Pipeline) Analyze(ctx context.Context, ticker string, existing *model.E
 	if err != nil {
 		return nil, err
 	}
+	normalizePerShareInputs(result)
 	if p.Market == nil {
 		result.Warnings = append(result.Warnings, ErrNoMarketProvider.Error())
 		enrichValuation(result)
+		enrichValuationHistory(result, result.Prices)
 		return result, nil
 	}
-	start := time.Now().UTC().AddDate(-9, 0, 0)
+	start := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Now().UTC()
 	prices, source, err := p.Market.History(ctx, ticker, start, end)
 	if err != nil {
-		result.Warnings = append(result.Warnings, "market data: "+err.Error())
-		enrichValuation(result)
-		return result, nil
+		longHistoryErr := err
+		prices, source, err = p.Market.History(ctx, ticker, end.AddDate(-9, 0, 0), end)
+		if err != nil {
+			result.Warnings = append(result.Warnings, "market data: "+err.Error())
+			enrichValuation(result)
+			enrichValuationHistory(result, result.Prices)
+			return result, nil
+		}
+		result.Warnings = append(result.Warnings, "market history limited to 9 years: "+longHistoryErr.Error())
 	}
 	enrichMarket(result, prices)
 	enrichValuation(result)
+	enrichValuationHistory(result, prices)
 	result.Sources = append(result.Sources, source)
 	return result, nil
 }
@@ -79,14 +89,28 @@ func (c *CompositeMarket) History(ctx context.Context, ticker string, start, end
 		return nil, "", ErrNoMarketProvider
 	}
 	var failures []string
+	var best []model.PricePoint
+	bestSource := ""
 	for _, provider := range c.providers {
 		rows, source, err := provider.History(ctx, ticker, start, end)
 		if err == nil && len(rows) > 0 {
-			return rows, source, nil
+			sort.Slice(rows, func(i, j int) bool { return rows[i].Date < rows[j].Date })
+			if len(best) == 0 || rows[0].Date < best[0].Date {
+				best = rows
+				bestSource = source
+			}
+			first, firstErr := time.Parse("2006-01-02", rows[0].Date)
+			last, lastErr := time.Parse("2006-01-02", rows[len(rows)-1].Date)
+			if firstErr == nil && lastErr == nil && last.Sub(first) >= 10*365*24*time.Hour {
+				return rows, source, nil
+			}
 		}
 		if err != nil {
 			failures = append(failures, err.Error())
 		}
+	}
+	if len(best) > 0 {
+		return best, bestSource, nil
 	}
 	return nil, "", errors.New(strings.Join(failures, "; "))
 }
@@ -165,6 +189,85 @@ func decodeThetaRows(body []byte) ([]thetaEOD, error) {
 		return nil, fmt.Errorf("decode ThetaData response: %w", err)
 	}
 	return envelope.Response, nil
+}
+
+type YahooMarket struct {
+	baseURL string
+	http    *http.Client
+}
+
+func NewYahooMarket(client *http.Client) *YahooMarket {
+	if client == nil {
+		client = &http.Client{Timeout: 45 * time.Second}
+	}
+	return &YahooMarket{baseURL: "https://query2.finance.yahoo.com", http: client}
+}
+
+func (y *YahooMarket) History(ctx context.Context, ticker string, start, end time.Time) ([]model.PricePoint, string, error) {
+	query := url.Values{
+		"period1":              {strconv.FormatInt(start.Unix(), 10)},
+		"period2":              {strconv.FormatInt(end.AddDate(0, 0, 1).Unix(), 10)},
+		"interval":             {"1mo"},
+		"events":               {"history"},
+		"includeAdjustedClose": {"false"},
+	}
+	endpoint := y.baseURL + "/v8/finance/chart/" + url.PathEscape(ticker) + "?" + query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "parallel-ocean-equities/1.0")
+	resp, err := y.http.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("Yahoo Finance: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return nil, "", fmt.Errorf("Yahoo Finance HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Chart struct {
+			Result []struct {
+				Timestamps []int64 `json:"timestamp"`
+				Indicators struct {
+					Quote []struct {
+						Close []*float64 `json:"close"`
+					} `json:"quote"`
+				} `json:"indicators"`
+			} `json:"result"`
+			Error *struct {
+				Description string `json:"description"`
+			} `json:"error"`
+		} `json:"chart"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&payload); err != nil {
+		return nil, "", fmt.Errorf("decode Yahoo Finance response: %w", err)
+	}
+	if payload.Chart.Error != nil {
+		return nil, "", fmt.Errorf("Yahoo Finance: %s", payload.Chart.Error.Description)
+	}
+	if len(payload.Chart.Result) == 0 || len(payload.Chart.Result[0].Indicators.Quote) == 0 {
+		return nil, "", errors.New("Yahoo Finance returned no history")
+	}
+	result := payload.Chart.Result[0]
+	closes := result.Indicators.Quote[0].Close
+	prices := make([]model.PricePoint, 0, len(result.Timestamps))
+	for index, timestamp := range result.Timestamps {
+		if index >= len(closes) || closes[index] == nil || *closes[index] <= 0 {
+			continue
+		}
+		observed := time.Unix(timestamp, 0).UTC()
+		date := observed
+		if observed.Year() != end.Year() || observed.Month() != end.Month() {
+			date = time.Date(observed.Year(), observed.Month()+1, 0, 0, 0, 0, 0, time.UTC)
+		}
+		prices = append(prices, model.PricePoint{Date: date.Format("2006-01-02"), Close: *closes[index]})
+	}
+	if len(prices) == 0 {
+		return nil, "", errors.New("Yahoo Finance returned no valid closes")
+	}
+	return prices, "Yahoo Finance monthly closes", nil
 }
 
 type PolygonMarket struct {

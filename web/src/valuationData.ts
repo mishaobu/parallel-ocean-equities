@@ -1,10 +1,12 @@
-import type { QuarterlyPoint, ValuationMetrics } from "./types";
+import type { QuarterlyPoint, ValuationMetrics, ValuationPoint } from "./types";
+
+export type ValuationMetricKey = "pe" | "ev-ebitda" | "ev-ebit" | "fcf-market-cap" | "fcf-ev" | "net-debt-ebitda" | "dividend-fcf";
 
 export interface ValuationRow {
-  key: string;
+  key: ValuationMetricKey;
   label: string;
-  actual: keyof ValuationMetrics;
-  forward: keyof ValuationMetrics;
+  actual: keyof ValuationMetrics & keyof ValuationPoint;
+  forward: keyof ValuationMetrics & keyof ValuationPoint;
   kind: "multiple" | "yield" | "leverage";
 }
 

@@ -2,16 +2,19 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, Calculator, GitCompareArrows, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
+import { historyDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
+import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
 import { PriceChart } from "./components/PriceChart";
 import { BalanceSheetChart, QuarterlyChart } from "./components/QuarterlyCharts";
 import { QuarterlyTable } from "./components/QuarterlyTable";
 import { TickerRail } from "./components/TickerRail";
 import { ValuationMatrix } from "./components/ValuationMatrix";
+import { ValuationHistoryCharts } from "./components/ValuationHistoryCharts";
 import { ValuationWorkbench } from "./components/ValuationWorkbench";
-import type { Equity, MetricKey, StateResponse } from "./types";
-import { formatValuation, valuationRows } from "./valuationData";
+import type { Equity, MacroSeries, MetricKey, StateResponse } from "./types";
+import { formatValuation, valuationRows, type ValuationMetricKey } from "./valuationData";
 
 const metrics: MetricKey[] = ["revenueB", "capexB", "netIncomeB", "dilutedEps", "peRatio"];
 type ViewMode = "compare" | "ticker" | "models";
@@ -61,6 +64,7 @@ function App() {
   const equities = useMemo(() => Object.values(payload?.state.tickers ?? {}).sort((a, b) => a.ticker.localeCompare(b.ticker)), [payload]);
   const overviewEquity = payload?.state.tickers[selected] ?? equities[0];
   const selectedEquity = details[selected] ?? overviewEquity;
+  const refreshCount = (payload?.runtime.inFlight ?? 0) + (payload?.runtime.macroRefreshing ? 1 : 0);
 
   useEffect(() => {
     if (mode === "compare" || !selected || loadingDetail === selected) return;
@@ -116,7 +120,7 @@ function App() {
           <input id="ticker-input" value={input} onChange={(event) => setInput(event.target.value.toUpperCase())} placeholder="NVDA" maxLength={10} autoComplete="off" />
           <button type="submit" disabled={submitting || !input.trim()} aria-label="Add ticker"><Plus size={17} /></button>
         </form>
-        <div className="freshness"><span className={payload?.runtime.inFlight ? "status-dot active" : "status-dot"} />{payload?.runtime.inFlight ? `${payload.runtime.inFlight} refreshing` : `Updated ${timeAgo(payload?.state.updatedAt)}`}</div>
+        <div className="freshness"><span className={refreshCount ? "status-dot active" : "status-dot"} />{refreshCount ? `${refreshCount} refreshing` : `Updated ${timeAgo(payload?.state.updatedAt)}`}</div>
       </header>
 
       {error && <div className="error-banner" role="alert">{error}</div>}
@@ -130,10 +134,9 @@ function App() {
               <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Financials</button>
               <button type="button" className={mode === "models" ? "is-active" : ""} onClick={() => setMode("models")} disabled={!selectedEquity}><Calculator size={15} />Models</button>
             </div>
-            {mode === "compare" && <div className="metric-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => setMetric(key)}>{metricLabels[key]}</button>)}</div>}
           </div>
 
-          {mode === "compare" && <CompareView equities={equities} metric={metric} />}
+          {mode === "compare" && <CompareView equities={equities} metric={metric} onMetric={setMetric} macro={payload?.state.macro} />}
           {mode === "ticker" && selectedEquity && <TickerView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} onRefresh={refreshTicker} onRemove={removeTicker} />}
           {mode === "models" && selectedEquity && <ModelsView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} />}
         </main>
@@ -142,18 +145,45 @@ function App() {
   );
 }
 
-function CompareView({ equities, metric }: { equities: Equity[]; metric: MetricKey }) {
+function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]; metric: MetricKey; onMetric: (metric: MetricKey) => void; macro?: MacroSeries }) {
+  const [basis, setBasis] = useState<HistoryBasis>("actual");
+  const [range, setRange] = useState<HistoryRange>("max");
+  const [valuationMetric, setValuationMetric] = useState<ValuationMetricKey>("pe");
+  const domain = useMemo(() => historyDomain(equities, macro?.points ?? [], range), [equities, macro?.points, range]);
   return (
     <section className="view">
-      <div className="view-title"><div><h1>Valuation overview</h1><span>{equities.length} tickers / LTM and forward</span></div></div>
+      <div className="view-title"><div><h1>Valuation history</h1><span>{equities.length} tickers / {domainLabel(domain)}</span></div></div>
+      <div className="history-toolbar">
+        <div className="metric-tabs valuation-tabs" aria-label="Valuation metric">
+          {valuationRows.map((row) => <button type="button" key={row.key} className={valuationMetric === row.key ? "is-active" : ""} onClick={() => setValuationMetric(row.key)}>{row.label}</button>)}
+        </div>
+        <div className="history-switches">
+          <div className="segmented compact-segmented" aria-label="Valuation basis">
+            <button type="button" className={basis === "actual" ? "is-active" : ""} onClick={() => setBasis("actual")}>LTM</button>
+            <button type="button" className={basis === "forward" ? "is-active" : ""} onClick={() => setBasis("forward")}>Forward</button>
+          </div>
+          <div className="segmented compact-segmented" aria-label="History range">
+            {(["max", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+          </div>
+        </div>
+      </div>
+      <ValuationHistoryCharts equities={equities} metric={valuationMetric} basis={basis} domain={domain} />
+      <div className="section-heading"><div><h2>Monetary context</h2><span>Monthly FRED series / synchronized timeline</span></div></div>
+      <MacroCharts macro={macro} domain={domain} />
+      <div className="section-heading"><div><h2>Current valuation</h2><span>LTM and forward snapshot</span></div></div>
       <ValuationMatrix equities={equities} />
       <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
+      <div className="metric-tabs annual-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => onMetric(key)}>{metricLabels[key]}</button>)}</div>
       <MetricChart equities={equities} metric={metric} />
       <div className="small-multiples">
         {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={equities} metric={key} compact />)}
       </div>
     </section>
   );
+}
+
+function domainLabel(domain: [number, number]) {
+  return `${new Date(domain[0]).getUTCFullYear()}-${new Date(domain[1]).getUTCFullYear()}`;
 }
 
 function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {

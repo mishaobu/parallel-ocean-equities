@@ -15,6 +15,29 @@ type fakeAnalyzer struct {
 	panicValue any
 }
 
+type fakeMacroAnalyzer struct {
+	err     error
+	started chan struct{}
+	release chan struct{}
+}
+
+func (f fakeMacroAnalyzer) Analyze(ctx context.Context) (model.MacroSeries, error) {
+	if f.started != nil {
+		close(f.started)
+	}
+	if f.release != nil {
+		select {
+		case <-ctx.Done():
+			return model.MacroSeries{}, ctx.Err()
+		case <-f.release:
+		}
+	}
+	if f.err != nil {
+		return model.MacroSeries{}, f.err
+	}
+	return model.MacroSeries{Points: []model.MacroPoint{{Date: "2025-01-01", FedFunds: floatPtr(4.5)}}}, nil
+}
+
 func (f fakeAnalyzer) Analyze(_ context.Context, ticker string, _ *model.Equity) (*model.Equity, error) {
 	if f.panicValue != nil {
 		panic(f.panicValue)
@@ -91,4 +114,41 @@ func TestServiceRefreshLifecycle(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("refresh did not complete")
+}
+
+func TestServiceRefreshAllQueuesMacroOnce(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service := NewService(state, fakeAnalyzer{}).WithMacro(fakeMacroAnalyzer{started: started, release: release})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.Start(ctx, 1)
+
+	service.RefreshAll()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("macro refresh did not start")
+	}
+	if service.QueueMacro() {
+		t.Fatal("duplicate macro refresh should not be queued")
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot := service.Snapshot()
+		if len(snapshot.Macro.Points) == 1 && !service.Stats().MacroRefreshing {
+			if snapshot.Macro.Points[0].FedFunds == nil || *snapshot.Macro.Points[0].FedFunds != 4.5 {
+				t.Fatalf("unexpected macro state: %#v", snapshot.Macro)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("macro refresh did not complete")
 }

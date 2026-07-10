@@ -99,6 +99,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	state := s.service.Snapshot()
 	for _, equity := range state.Tickers {
 		equity.Quarterlies = nil
+		equity.Prices = nil
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":   state,
@@ -188,6 +189,19 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP equities_refresh_inflight Active or queued refresh jobs.\n")
 	fmt.Fprintf(w, "# TYPE equities_refresh_inflight gauge\n")
 	fmt.Fprintf(w, "equities_refresh_inflight %d\n", stats.InFlight+stats.QueueDepth)
+	fmt.Fprintf(w, "# HELP equities_macro_refreshing Whether a macro refresh is active or queued.\n")
+	fmt.Fprintf(w, "# TYPE equities_macro_refreshing gauge\n")
+	fmt.Fprintf(w, "equities_macro_refreshing %d\n", boolGauge(stats.MacroRefreshing))
+	fmt.Fprintf(w, "# HELP equities_macro_refresh_failures_total Failed macro refresh attempts.\n")
+	fmt.Fprintf(w, "# TYPE equities_macro_refresh_failures_total counter\n")
+	fmt.Fprintf(w, "equities_macro_refresh_failures_total %d\n", stats.MacroFailures)
+}
+
+func boolGauge(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Server) handleBaseRedirect(w http.ResponseWriter, r *http.Request) {

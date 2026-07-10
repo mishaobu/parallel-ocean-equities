@@ -28,11 +28,12 @@ func main() {
 	polygonAPIKey := os.Getenv("POLYGON_API_KEY")
 	sec := analysis.NewSECClient(env("SEC_USER_AGENT", "parallel-ocean-equities parallel-ocean.xyz/equities"), polygonAPIKey, httpClient)
 	market := analysis.NewCompositeMarket(
+		analysis.NewYahooMarket(httpClient),
 		analysis.NewThetaMarket(os.Getenv("THETA_BASE_URL"), httpClient),
 		analysis.NewPolygonMarket(polygonAPIKey, httpClient),
 	)
 	pipeline := &analysis.Pipeline{SEC: sec, Market: market}
-	service := analysis.NewService(state, pipeline)
+	service := analysis.NewService(state, pipeline).WithMacro(analysis.NewFREDClient(env("FRED_USER_AGENT", "parallel-ocean-equities/1.0 (https://parallel-ocean.xyz/equities)"), httpClient))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

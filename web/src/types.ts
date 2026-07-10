@@ -74,6 +74,47 @@ export interface ValuationMetrics {
   forwardDividendToFcf?: number;
 }
 
+export interface ValuationPoint {
+  date: string;
+  pe?: number;
+  forwardPe?: number;
+  evToEbitda?: number;
+  forwardEvToEbitda?: number;
+  evToEbit?: number;
+  forwardEvToEbit?: number;
+  fcfToMarketCap?: number;
+  forwardFcfToMarketCap?: number;
+  fcfToEv?: number;
+  forwardFcfToEv?: number;
+  netDebtToEbitda?: number;
+  forwardNetDebtToEbitda?: number;
+  dividendToFcf?: number;
+  forwardDividendToFcf?: number;
+}
+
+export interface MacroPoint {
+  date: string;
+  inflation?: number;
+  fedFunds?: number;
+  treasury2Y?: number;
+  treasury10Y?: number;
+  realPolicyRate?: number;
+  yieldCurve?: number;
+  logM1?: number;
+  logM2?: number;
+  logFedAssets?: number;
+  m1Growth?: number;
+  m2Growth?: number;
+  corporateSpread?: number;
+}
+
+export interface MacroSeries {
+  updatedAt?: string;
+  sources?: string[];
+  error?: string;
+  points?: MacroPoint[];
+}
+
 export interface ForecastModel {
   horizon?: string;
   method?: string;
@@ -131,6 +172,7 @@ export interface Equity {
   valuation?: ValuationMetrics;
   forecast?: ForecastModel;
   models?: ValuationModels;
+  valuations?: ValuationPoint[];
 }
 
 export interface RuntimeStats {
@@ -139,6 +181,9 @@ export interface RuntimeStats {
   queueDepth: number;
   inFlight: number;
   lastRefresh?: string;
+  macroRefreshing?: boolean;
+  macroLastRefresh?: string;
+  macroFailures?: number;
 }
 
 export interface StateResponse {
@@ -146,6 +191,7 @@ export interface StateResponse {
     version: number;
     updatedAt: string;
     tickers: Record<string, Equity>;
+    macro?: MacroSeries;
   };
   runtime: RuntimeStats;
 }

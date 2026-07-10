@@ -38,7 +38,7 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	}
 	state := model.NewState()
 	state.UpdatedAt = time.Now()
-	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}}
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}}
 	service := &fakeService{state: state}
 	handler := New(service, Config{BasePath: "/equities", StaticDir: dir}).Handler()
 
@@ -52,15 +52,15 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/equities/api/state", nil)
 	resp = httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
-		t.Fatalf("overview should omit quarterly history: %d %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
+		t.Fatalf("overview should omit raw histories: %d %s", resp.Code, resp.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN", nil)
 	resp = httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
-	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
-		t.Fatalf("ticker detail should include quarterly history: %d %s", resp.Code, resp.Body.String())
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || !bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
+		t.Fatalf("ticker detail should include raw histories: %d %s", resp.Code, resp.Body.String())
 	}
 
 	body, _ := json.Marshal(map[string]string{"ticker": "NVDA"})

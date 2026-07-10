@@ -41,6 +41,29 @@ func TestOpenSeedsAndPersists(t *testing.T) {
 	}
 }
 
+func TestMacroErrorPreservesLastSuccessfulPoints(t *testing.T) {
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.json")
+	state := model.NewState()
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Annuals: []model.AnnualPoint{}}
+	writeJSON(t, seed, state)
+	store, err := Open(filepath.Join(dir, "state.json"), seed, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	series := model.MacroSeries{Points: []model.MacroPoint{{Date: "2025-01-01"}}}
+	if err := store.SetMacro(series); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMacroError(errors.New("FRED unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	got := store.Snapshot().Macro
+	if len(got.Points) != 1 || got.Error != "FRED unavailable" {
+		t.Fatalf("unexpected macro state: %#v", got)
+	}
+}
+
 func writeJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	data, err := jsonMarshal(value)

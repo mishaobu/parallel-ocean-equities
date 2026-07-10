@@ -2,9 +2,200 @@ package analysis
 
 import (
 	"math"
+	"sort"
+	"time"
 
 	"github.com/mishaobu/parallel-ocean-equities/internal/model"
 )
+
+func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
+	equity.Valuations = nil
+	if len(equity.Quarterlies) < 4 || len(prices) == 0 {
+		return
+	}
+	sort.Slice(prices, func(i, j int) bool { return prices[i].Date < prices[j].Date })
+	quarters := equity.Quarterlies
+	for index := 3; index < len(quarters); index++ {
+		date := quarters[index].PeriodEnd
+		price, ok := priceOnOrBefore(prices, date)
+		if !ok || price <= 0 {
+			continue
+		}
+		trailing := quarters[index-3 : index+1]
+		var forward []model.QuarterlyPoint
+		if index+4 < len(quarters) {
+			forward = quarters[index+1 : index+5]
+		}
+		equity.Valuations = append(equity.Valuations, historicalValuationPoint(date, price, trailing, forward))
+	}
+
+	currentDate := equity.Current.PriceAsOf
+	if currentDate == "" || equity.Current.Price == nil {
+		return
+	}
+	if len(equity.Valuations) > 0 && currentDate <= equity.Valuations[len(equity.Valuations)-1].Date {
+		return
+	}
+	valuation := equity.Valuation
+	equity.Valuations = append(equity.Valuations, model.ValuationPoint{
+		Date:                   currentDate,
+		PE:                     valuation.PE,
+		ForwardPE:              valuation.ForwardPE,
+		EVToEBITDA:             valuation.EVToEBITDA,
+		ForwardEVToEBITDA:      valuation.ForwardEVToEBITDA,
+		EVToEBIT:               valuation.EVToEBIT,
+		ForwardEVToEBIT:        valuation.ForwardEVToEBIT,
+		FCFToMarketCap:         valuation.FCFToMarketCap,
+		ForwardFCFToMarketCap:  valuation.ForwardFCFToMarketCap,
+		FCFToEV:                valuation.FCFToEV,
+		ForwardFCFToEV:         valuation.ForwardFCFToEV,
+		NetDebtToEBITDA:        valuation.NetDebtToEBITDA,
+		ForwardNetDebtToEBITDA: valuation.ForwardNetDebtToEBITDA,
+		DividendToFCF:          valuation.DividendToFCF,
+		ForwardDividendToFCF:   valuation.ForwardDividendToFCF,
+	})
+}
+
+func normalizePerShareInputs(equity *model.Equity) {
+	type shareProxy struct {
+		date   string
+		shares float64
+	}
+	var reference float64
+	for index := len(equity.Quarterlies) - 1; index >= 0; index-- {
+		if shares := equity.Quarterlies[index].DilutedSharesB; shares != nil && *shares > 0 {
+			reference = *shares
+			break
+		}
+	}
+	if reference == 0 {
+		return
+	}
+	proxies := make([]shareProxy, 0, len(equity.Annuals)+len(equity.Quarterlies))
+	for _, row := range equity.Quarterlies {
+		if row.DilutedSharesB != nil && plausibleShareCount(*row.DilutedSharesB, reference) {
+			proxies = append(proxies, shareProxy{date: row.PeriodEnd, shares: *row.DilutedSharesB})
+		}
+	}
+	for _, row := range equity.Annuals {
+		if row.NetIncomeB == nil || row.DilutedEPS == nil || *row.DilutedEPS == 0 {
+			continue
+		}
+		shares := math.Abs(*row.NetIncomeB / *row.DilutedEPS)
+		if plausibleShareCount(shares, reference) {
+			proxies = append(proxies, shareProxy{date: row.PeriodEnd, shares: shares})
+		}
+	}
+	if len(proxies) == 0 {
+		return
+	}
+	nearest := func(date string) float64 {
+		best := proxies[0]
+		bestDistance := dateDistance(date, best.date)
+		for _, candidate := range proxies[1:] {
+			distance := dateDistance(date, candidate.date)
+			if distance < bestDistance {
+				best = candidate
+				bestDistance = distance
+			}
+		}
+		return best.shares
+	}
+
+	for index := range equity.Annuals {
+		row := &equity.Annuals[index]
+		if row.NetIncomeB == nil || row.DilutedEPS == nil || *row.DilutedEPS == 0 {
+			continue
+		}
+		impliedShares := math.Abs(*row.NetIncomeB / *row.DilutedEPS)
+		if !plausibleShareCount(impliedShares, reference) {
+			row.DilutedEPS = floatPtr(*row.NetIncomeB / nearest(row.PeriodEnd))
+		}
+	}
+	for index := range equity.Quarterlies {
+		row := &equity.Quarterlies[index]
+		if row.DilutedSharesB == nil || !plausibleShareCount(*row.DilutedSharesB, reference) {
+			row.DilutedSharesB = floatPtr(nearest(row.PeriodEnd))
+		}
+		if row.NetIncomeB == nil || row.DilutedSharesB == nil || *row.DilutedSharesB <= 0 {
+			continue
+		}
+		impliedEPS := *row.NetIncomeB / *row.DilutedSharesB
+		if row.DilutedEPS == nil || math.Abs(*row.DilutedEPS-impliedEPS) > math.Max(0.02, math.Abs(impliedEPS)*0.25) {
+			row.DilutedEPS = floatPtr(impliedEPS)
+		}
+	}
+}
+
+func plausibleShareCount(shares, reference float64) bool {
+	return shares > 0 && shares >= reference/4 && shares <= reference*4
+}
+
+func dateDistance(left, right string) time.Duration {
+	leftDate, leftErr := time.Parse("2006-01-02", left)
+	rightDate, rightErr := time.Parse("2006-01-02", right)
+	if leftErr != nil || rightErr != nil {
+		return time.Duration(1<<63 - 1)
+	}
+	distance := leftDate.Sub(rightDate)
+	if distance < 0 {
+		return -distance
+	}
+	return distance
+}
+
+func historicalValuationPoint(date string, price float64, trailing, forward []model.QuarterlyPoint) model.ValuationPoint {
+	shares := latestQuarterValue(trailing, func(row model.QuarterlyPoint) *float64 { return row.DilutedSharesB })
+	netDebt := latestQuarterValue(trailing, func(row model.QuarterlyPoint) *float64 { return row.NetDebtB })
+	var marketCap, enterpriseValue *float64
+	if shares != nil && *shares > 0 {
+		marketCap = floatPtr(price * *shares)
+	}
+	if marketCap != nil && netDebt != nil {
+		enterpriseValue = floatPtr(*marketCap + *netDebt)
+	}
+	point := model.ValuationPoint{Date: date}
+	trailingNetIncome := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.NetIncomeB })
+	point.PE = meaningfulMultiple(marketCap, trailingNetIncome)
+	trailingEBITDA := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.EBITDAB })
+	trailingEBIT := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.EBITB })
+	trailingFCF := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.FCFB })
+	trailingDividends := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.DividendsB })
+	point.EVToEBITDA = meaningfulMultiple(enterpriseValue, trailingEBITDA)
+	point.EVToEBIT = meaningfulMultiple(enterpriseValue, trailingEBIT)
+	point.FCFToMarketCap = ratio(trailingFCF, marketCap)
+	point.FCFToEV = ratio(trailingFCF, enterpriseValue)
+	point.NetDebtToEBITDA = ratio(netDebt, trailingEBITDA)
+	point.DividendToFCF = ratio(trailingDividends, trailingFCF)
+
+	if len(forward) != 4 {
+		return point
+	}
+	forwardNetIncome := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.NetIncomeB })
+	point.ForwardPE = meaningfulMultiple(marketCap, forwardNetIncome)
+	forwardEBITDA := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.EBITDAB })
+	forwardEBIT := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.EBITB })
+	forwardFCF := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.FCFB })
+	forwardDividends := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.DividendsB })
+	point.ForwardEVToEBITDA = meaningfulMultiple(enterpriseValue, forwardEBITDA)
+	point.ForwardEVToEBIT = meaningfulMultiple(enterpriseValue, forwardEBIT)
+	point.ForwardFCFToMarketCap = ratio(forwardFCF, marketCap)
+	point.ForwardFCFToEV = ratio(forwardFCF, enterpriseValue)
+	point.ForwardNetDebtToEBITDA = ratio(netDebt, forwardEBITDA)
+	point.ForwardDividendToFCF = ratio(forwardDividends, forwardFCF)
+	return point
+}
+
+func meaningfulMultiple(numerator, denominator *float64) *float64 {
+	if numerator == nil || denominator == nil || *denominator <= 0 {
+		return nil
+	}
+	value := *numerator / *denominator
+	if value <= 0 || value > 200 {
+		return nil
+	}
+	return floatPtr(value)
+}
 
 func enrichValuation(equity *model.Equity) {
 	quarters := equity.Quarterlies
