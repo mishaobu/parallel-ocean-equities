@@ -1,8 +1,7 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { comparisonRows, formatMetric, metricLabels } from "../chartData";
+import { comparisonRows, descendingTooltipItem, formatMetric, metricLabels } from "../chartData";
+import { equityColor } from "../colors";
 import type { Equity, MetricKey } from "../types";
-
-const colors = ["#176b4d", "#2962a3", "#b46016", "#7047a3", "#a3304d", "#087b84"];
 
 interface Props {
   equities: Equity[];
@@ -25,16 +24,16 @@ export function MetricChart({ equities, metric, compact = false }: Props) {
             <CartesianGrid vertical={false} stroke="#e5e9e6" />
             <XAxis dataKey="year" tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} />
             <YAxis tickFormatter={(value) => formatMetric(metric, Number(value))} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
-            <Tooltip formatter={(value) => formatMetric(metric, Number(value))} labelFormatter={(label) => `FY${label}`} />
+            <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatMetric(metric, Number(value))} labelFormatter={(label) => `FY${label}`} />
             {!compact && <Legend iconType="line" wrapperStyle={{ fontSize: 12 }} />}
             {estimateYear && <ReferenceArea x1={estimateYear - 0.45} x2={estimateYear + 0.45} fill="#f3eee5" fillOpacity={0.72} />}
-            {equities.map((equity, index) => (
+            {equities.map((equity) => (
               <Line
                 key={equity.ticker}
                 type="monotone"
                 dataKey={equity.ticker}
                 name={equity.ticker}
-                stroke={colors[index % colors.length]}
+                stroke={equityColor(equity.ticker)}
                 strokeWidth={2.2}
                 dot={{ r: 3, strokeWidth: 2, fill: "#fff" }}
                 activeDot={{ r: 5 }}

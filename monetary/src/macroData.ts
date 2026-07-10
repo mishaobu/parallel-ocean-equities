@@ -56,3 +56,8 @@ export function meanDefined(values: Array<number | undefined>) {
   const defined = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
   return defined.length ? defined.reduce((sum, value) => sum + value, 0) / defined.length : undefined;
 }
+
+export function descendingTooltipItem(item: { value?: unknown }) {
+  const value = Number(item.value);
+  return Number.isFinite(value) ? -value : Number.POSITIVE_INFINITY;
+}

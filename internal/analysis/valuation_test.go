@@ -84,7 +84,38 @@ func TestEnrichValuationHistoryUsesTrailingAndRealizedForwardQuarters(t *testing
 		t.Fatalf("latest valuation date = %s", latest.Date)
 	}
 	assertClose(t, "current P/E", latest.PE, 15)
-	assertClose(t, "current forward P/E", latest.ForwardPE, 12)
+	if latest.ForwardPE != nil {
+		t.Fatalf("current model value should not be mixed into realized history: %#v", latest.ForwardPE)
+	}
+}
+
+func TestEnrichValuationHistoryUsesFilingDatesAndOlderAnnualInputs(t *testing.T) {
+	equity := &model.Equity{
+		Annuals: []model.AnnualPoint{
+			{PeriodEnd: "2008-12-31", FiledAt: "2009-02-15", NetIncomeB: floatPtr(2), EBITB: floatPtr(3), EBITDAB: floatPtr(4), FCFB: floatPtr(1), DividendsB: floatPtr(0.2), DilutedSharesB: floatPtr(1), NetDebtB: floatPtr(2)},
+			{PeriodEnd: "2009-12-31", FiledAt: "2010-02-15", NetIncomeB: floatPtr(2.5), EBITB: floatPtr(3.5), EBITDAB: floatPtr(4.5), FCFB: floatPtr(1.5), DividendsB: floatPtr(0.3), DilutedSharesB: floatPtr(1), NetDebtB: floatPtr(1)},
+		},
+	}
+	for index, periodEnd := range []string{"2010-03-31", "2010-06-30", "2010-09-30", "2010-12-31"} {
+		equity.Quarterlies = append(equity.Quarterlies, model.QuarterlyPoint{
+			PeriodEnd: periodEnd, FiledAt: []string{"2010-05-01", "2010-08-01", "2010-11-01", "2011-02-15"}[index],
+			NetIncomeB: floatPtr(1), EBITB: floatPtr(1), EBITDAB: floatPtr(1.2), FCFB: floatPtr(0.8), DividendsB: floatPtr(0.1), DilutedSharesB: floatPtr(1), NetDebtB: floatPtr(1),
+		})
+	}
+	prices := []model.PricePoint{
+		{Date: "2009-01-31", Close: 10}, {Date: "2010-01-31", Close: 20}, {Date: "2011-01-31", Close: 30},
+	}
+
+	enrichValuationHistory(equity, prices)
+	if len(equity.Valuations) != 3 {
+		t.Fatalf("valuation points = %d, want 3: %#v", len(equity.Valuations), equity.Valuations)
+	}
+	if equity.Valuations[0].Date != "2009-02-15" || equity.Valuations[2].Date != "2011-02-15" {
+		t.Fatalf("valuation dates should be filing availability dates: %#v", equity.Valuations)
+	}
+	assertClose(t, "annual P/E", equity.Valuations[0].PE, 5)
+	assertClose(t, "annual realized next P/E", equity.Valuations[0].ForwardPE, 4)
+	assertClose(t, "quarterly P/E", equity.Valuations[2].PE, 7.5)
 }
 
 func TestNormalizePerShareInputsRepairsInconsistentSECPerShareFacts(t *testing.T) {

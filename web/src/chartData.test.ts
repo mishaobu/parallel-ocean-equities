@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { comparisonRows, delta, formatMetric } from "./chartData";
+import { comparisonRows, delta, descendingTooltipItem, formatMetric } from "./chartData";
 import type { Equity } from "./types";
 
 const equity: Equity = {
@@ -26,5 +26,10 @@ describe("chart data", () => {
     expect(formatMetric("capexB", 12.25)).toBe("$12.3B");
     expect(formatMetric("peRatio", 22.04)).toBe("22.0x");
     expect(delta(15, 12)).toBeCloseTo(0.25);
+  });
+
+  it("orders tooltip values from highest to lowest", () => {
+    const values = [{ value: 2.8 }, { value: 474 }, { value: 52 }, { value: 1.1 }];
+    expect(values.sort((left, right) => descendingTooltipItem(left) - descendingTooltipItem(right)).map((item) => item.value)).toEqual([474, 52, 2.8, 1.1]);
   });
 });

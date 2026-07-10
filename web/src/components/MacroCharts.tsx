@@ -1,5 +1,6 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { macroHistoryRows } from "../historyData";
+import { descendingTooltipItem } from "../chartData";
 import type { MacroPoint, MacroSeries } from "../types";
 
 type MacroKey = Exclude<keyof MacroPoint, "date">;
@@ -61,7 +62,7 @@ export function MacroCharts({ macro, domain }: { macro?: MacroSeries; domain: [n
             <CartesianGrid vertical={false} stroke="#e5e9e6" />
             <XAxis dataKey="date" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />
             <YAxis domain={panel.unit === "log" ? ["auto", "auto"] : undefined} tickFormatter={(value) => formatMacro(Number(value), panel.unit)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={55} />
-            <Tooltip formatter={(value) => formatMacro(Number(value), panel.unit)} labelFormatter={(value) => dateLabel(Number(value))} />
+            <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatMacro(Number(value), panel.unit)} labelFormatter={(value) => dateLabel(Number(value))} />
             <Legend iconType="line" wrapperStyle={{ fontSize: 11 }} />
             {panel.zero && <ReferenceLine y={0} stroke="#aeb8b1" strokeDasharray="3 3" />}
             {panel.lines.map((line) => <Line key={line.key} type="monotone" dataKey={line.key} name={line.label} stroke={line.color} strokeWidth={1.8} dot={false} connectNulls isAnimationActive={false} />)}

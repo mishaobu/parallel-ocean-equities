@@ -10,13 +10,14 @@ import (
 
 func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
 	equity.Valuations = nil
-	if len(equity.Quarterlies) < 4 || len(prices) == 0 {
+	if len(prices) == 0 {
 		return
 	}
 	sort.Slice(prices, func(i, j int) bool { return prices[i].Date < prices[j].Date })
 	quarters := equity.Quarterlies
+	quarterlyPoints := make([]model.ValuationPoint, 0, len(quarters))
 	for index := 3; index < len(quarters); index++ {
-		date := quarters[index].PeriodEnd
+		date := availableDate(quarters[index].FiledAt, quarters[index].PeriodEnd)
 		price, ok := priceOnOrBefore(prices, date)
 		if !ok || price <= 0 {
 			continue
@@ -26,8 +27,36 @@ func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
 		if index+4 < len(quarters) {
 			forward = quarters[index+1 : index+5]
 		}
-		equity.Valuations = append(equity.Valuations, historicalValuationPoint(date, price, trailing, forward))
+		quarterlyPoints = append(quarterlyPoints, historicalValuationPoint(date, price, trailing, forward))
 	}
+
+	firstQuarterlyDate := ""
+	if len(quarterlyPoints) > 0 {
+		firstQuarterlyDate = quarterlyPoints[0].Date
+	}
+	actualAnnuals := make([]model.AnnualPoint, 0, len(equity.Annuals))
+	for _, row := range equity.Annuals {
+		if !row.Estimate {
+			actualAnnuals = append(actualAnnuals, row)
+		}
+	}
+	for index, row := range actualAnnuals {
+		date := availableDate(row.FiledAt, row.PeriodEnd)
+		if date == "" || (firstQuarterlyDate != "" && date >= firstQuarterlyDate) {
+			continue
+		}
+		price, ok := priceOnOrBefore(prices, date)
+		if !ok || price <= 0 {
+			continue
+		}
+		var forward *model.AnnualPoint
+		if index+1 < len(actualAnnuals) {
+			forward = &actualAnnuals[index+1]
+		}
+		equity.Valuations = append(equity.Valuations, historicalAnnualValuationPoint(date, price, row, forward))
+	}
+	equity.Valuations = append(equity.Valuations, quarterlyPoints...)
+	sort.Slice(equity.Valuations, func(i, j int) bool { return equity.Valuations[i].Date < equity.Valuations[j].Date })
 
 	currentDate := equity.Current.PriceAsOf
 	if currentDate == "" || equity.Current.Price == nil {
@@ -38,22 +67,22 @@ func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
 	}
 	valuation := equity.Valuation
 	equity.Valuations = append(equity.Valuations, model.ValuationPoint{
-		Date:                   currentDate,
-		PE:                     valuation.PE,
-		ForwardPE:              valuation.ForwardPE,
-		EVToEBITDA:             valuation.EVToEBITDA,
-		ForwardEVToEBITDA:      valuation.ForwardEVToEBITDA,
-		EVToEBIT:               valuation.EVToEBIT,
-		ForwardEVToEBIT:        valuation.ForwardEVToEBIT,
-		FCFToMarketCap:         valuation.FCFToMarketCap,
-		ForwardFCFToMarketCap:  valuation.ForwardFCFToMarketCap,
-		FCFToEV:                valuation.FCFToEV,
-		ForwardFCFToEV:         valuation.ForwardFCFToEV,
-		NetDebtToEBITDA:        valuation.NetDebtToEBITDA,
-		ForwardNetDebtToEBITDA: valuation.ForwardNetDebtToEBITDA,
-		DividendToFCF:          valuation.DividendToFCF,
-		ForwardDividendToFCF:   valuation.ForwardDividendToFCF,
+		Date:            currentDate,
+		PE:              valuation.PE,
+		EVToEBITDA:      valuation.EVToEBITDA,
+		EVToEBIT:        valuation.EVToEBIT,
+		FCFToMarketCap:  valuation.FCFToMarketCap,
+		FCFToEV:         valuation.FCFToEV,
+		NetDebtToEBITDA: valuation.NetDebtToEBITDA,
+		DividendToFCF:   valuation.DividendToFCF,
 	})
+}
+
+func availableDate(filedAt, periodEnd string) string {
+	if filedAt != "" {
+		return filedAt
+	}
+	return periodEnd
 }
 
 func normalizePerShareInputs(equity *model.Equity) {
@@ -111,6 +140,9 @@ func normalizePerShareInputs(equity *model.Equity) {
 		if !plausibleShareCount(impliedShares, reference) {
 			row.DilutedEPS = floatPtr(*row.NetIncomeB / nearest(row.PeriodEnd))
 		}
+		if row.DilutedSharesB == nil || !plausibleShareCount(*row.DilutedSharesB, reference) {
+			row.DilutedSharesB = floatPtr(nearest(row.PeriodEnd))
+		}
 	}
 	for index := range equity.Quarterlies {
 		row := &equity.Quarterlies[index]
@@ -125,6 +157,39 @@ func normalizePerShareInputs(equity *model.Equity) {
 			row.DilutedEPS = floatPtr(impliedEPS)
 		}
 	}
+}
+
+func historicalAnnualValuationPoint(date string, price float64, trailing model.AnnualPoint, forward *model.AnnualPoint) model.ValuationPoint {
+	shares := trailing.DilutedSharesB
+	netDebt := trailing.NetDebtB
+	var marketCap, enterpriseValue *float64
+	if shares != nil && *shares > 0 {
+		marketCap = floatPtr(price * *shares)
+	}
+	if marketCap != nil && netDebt != nil {
+		enterpriseValue = floatPtr(*marketCap + *netDebt)
+	}
+	point := model.ValuationPoint{
+		Date:            date,
+		PE:              meaningfulMultiple(marketCap, trailing.NetIncomeB),
+		EVToEBITDA:      meaningfulMultiple(enterpriseValue, trailing.EBITDAB),
+		EVToEBIT:        meaningfulMultiple(enterpriseValue, trailing.EBITB),
+		FCFToMarketCap:  ratio(trailing.FCFB, marketCap),
+		FCFToEV:         ratio(trailing.FCFB, enterpriseValue),
+		NetDebtToEBITDA: ratio(netDebt, trailing.EBITDAB),
+		DividendToFCF:   ratio(trailing.DividendsB, trailing.FCFB),
+	}
+	if forward == nil {
+		return point
+	}
+	point.ForwardPE = meaningfulMultiple(marketCap, forward.NetIncomeB)
+	point.ForwardEVToEBITDA = meaningfulMultiple(enterpriseValue, forward.EBITDAB)
+	point.ForwardEVToEBIT = meaningfulMultiple(enterpriseValue, forward.EBITB)
+	point.ForwardFCFToMarketCap = ratio(forward.FCFB, marketCap)
+	point.ForwardFCFToEV = ratio(forward.FCFB, enterpriseValue)
+	point.ForwardNetDebtToEBITDA = ratio(netDebt, forward.EBITDAB)
+	point.ForwardDividendToFCF = ratio(forward.DividendsB, forward.FCFB)
+	return point
 }
 
 func plausibleShareCount(shares, reference float64) bool {

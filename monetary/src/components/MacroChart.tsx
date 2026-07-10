@@ -1,5 +1,5 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { chartRows, recessionIntervals, type MacroMetric } from "../macroData";
+import { chartRows, descendingTooltipItem, recessionIntervals, type MacroMetric } from "../macroData";
 import type { MacroPoint } from "../types";
 
 export interface SeriesSpec {
@@ -30,7 +30,7 @@ export function MacroChart({ title, note, points, domain, series, unit = "percen
           <XAxis dataKey="timestamp" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#69746d", fontSize: 10 }} minTickGap={38} axisLine={false} tickLine={false} />
           <YAxis yAxisId="left" tickFormatter={(value) => axisLabel(Number(value), unit)} tick={{ fill: "#69746d", fontSize: 10 }} axisLine={false} tickLine={false} width={52} />
           {hasRightAxis && <YAxis yAxisId="right" orientation="right" tickFormatter={(value) => compact(Number(value))} tick={{ fill: "#69746d", fontSize: 10 }} axisLine={false} tickLine={false} width={42} />}
-          <Tooltip labelFormatter={(value) => dateLabel(Number(value))} formatter={(value, name) => [tooltipValue(Number(value), unit), name]} contentStyle={{ border: "1px solid #cdd5cf", borderRadius: 4, fontSize: 11 }} />
+          <Tooltip itemSorter={descendingTooltipItem} labelFormatter={(value) => dateLabel(Number(value))} formatter={(value, name) => [tooltipValue(Number(value), unit), name]} contentStyle={{ border: "1px solid #cdd5cf", borderRadius: 4, fontSize: 11 }} />
           <Legend iconType="line" wrapperStyle={{ fontSize: 10 }} />
           {recessions.map((interval) => <ReferenceArea key={interval.start} yAxisId="left" x1={interval.start} x2={interval.end} fill="#c8ccc9" fillOpacity={0.28} strokeOpacity={0} />)}
           <ReferenceLine yAxisId="left" y={0} stroke="#aeb7b1" />

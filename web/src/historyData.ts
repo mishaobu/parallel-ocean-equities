@@ -18,6 +18,12 @@ export function historyDomain(equities: Equity[], macro: MacroPoint[], range: Hi
   return [dates.length ? Math.min(...dates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1), end];
 }
 
+export function valuationHistoryDomain(equities: Equity[], range: HistoryRange, now = new Date()): [number, number] {
+  if (range !== "max") return historyDomain(equities, [], range, now);
+  const dates = equities.flatMap((equity) => equity.valuations?.map((point) => Date.parse(point.date)) ?? []).filter(Number.isFinite);
+  return [dates.length ? Math.min(...dates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1), now.getTime()];
+}
+
 export function indexedPerformanceRows(equities: Equity[], domain: [number, number]) {
   const rows = new Map<number, Record<string, number>>();
   for (const equity of equities) {

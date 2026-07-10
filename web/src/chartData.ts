@@ -41,3 +41,8 @@ export function delta(current?: number, previous?: number): number | undefined {
   if (current === undefined || previous === undefined || previous === 0) return undefined;
   return current / previous - 1;
 }
+
+export function descendingTooltipItem(item: { value?: unknown }) {
+  const value = Number(item.value);
+  return Number.isFinite(value) ? -value : Number.POSITIVE_INFINITY;
+}

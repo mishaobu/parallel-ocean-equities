@@ -2,18 +2,30 @@ package model
 
 import "time"
 
-const StateVersion = 4
+const StateVersion = 5
 
 type AnnualPoint struct {
-	FiscalYear int      `json:"fiscalYear"`
-	PeriodEnd  string   `json:"periodEnd,omitempty"`
-	RevenueB   *float64 `json:"revenueB,omitempty"`
-	CapexB     *float64 `json:"capexB,omitempty"`
-	NetIncomeB *float64 `json:"netIncomeB,omitempty"`
-	DilutedEPS *float64 `json:"dilutedEps,omitempty"`
-	PERatio    *float64 `json:"peRatio,omitempty"`
-	Estimate   bool     `json:"estimate,omitempty"`
-	Confidence string   `json:"confidence,omitempty"`
+	FiscalYear     int      `json:"fiscalYear"`
+	PeriodEnd      string   `json:"periodEnd,omitempty"`
+	FiledAt        string   `json:"filedAt,omitempty"`
+	RevenueB       *float64 `json:"revenueB,omitempty"`
+	EBITB          *float64 `json:"ebitB,omitempty"`
+	DAB            *float64 `json:"daB,omitempty"`
+	EBITDAB        *float64 `json:"ebitdaB,omitempty"`
+	OperatingCashB *float64 `json:"operatingCashB,omitempty"`
+	CapexB         *float64 `json:"capexB,omitempty"`
+	FCFB           *float64 `json:"fcfB,omitempty"`
+	DividendsB     *float64 `json:"dividendsB,omitempty"`
+	NetIncomeB     *float64 `json:"netIncomeB,omitempty"`
+	DilutedEPS     *float64 `json:"dilutedEps,omitempty"`
+	DilutedSharesB *float64 `json:"dilutedSharesB,omitempty"`
+	CashB          *float64 `json:"cashB,omitempty"`
+	InvestmentsB   *float64 `json:"investmentsB,omitempty"`
+	DebtB          *float64 `json:"debtB,omitempty"`
+	NetDebtB       *float64 `json:"netDebtB,omitempty"`
+	PERatio        *float64 `json:"peRatio,omitempty"`
+	Estimate       bool     `json:"estimate,omitempty"`
+	Confidence     string   `json:"confidence,omitempty"`
 }
 
 type PricePoint struct {

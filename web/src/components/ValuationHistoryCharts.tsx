@@ -1,6 +1,7 @@
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { valuationHistoryRows, type HistoryBasis } from "../historyData";
 import { equityColor } from "../colors";
+import { descendingTooltipItem } from "../chartData";
 import type { Equity } from "../types";
 import { formatValuation, valuationRows, type ValuationMetricKey, type ValuationRow } from "../valuationData";
 
@@ -29,7 +30,7 @@ function ValuationHistoryChart({ equities, metric, basis, domain, compact = fals
     <div className={`chart history-chart${compact ? " chart-compact" : " chart-primary"}`}>
       <div className="chart-heading">
         <strong>{metric.label}</strong>
-        <span>{basis === "actual" ? "LTM" : "Forward"} / {metric.kind === "yield" ? "percent" : "multiple"}</span>
+        <span>{basis === "actual" ? "LTM at filing" : "Next 12m realized"} / {metric.kind === "yield" ? "percent" : "multiple"}</span>
       </div>
       <div className="chart-canvas">
         {data.length === 0 ? <ChartEmpty /> : <ResponsiveContainer width="100%" height="100%">
@@ -37,7 +38,7 @@ function ValuationHistoryChart({ equities, metric, basis, domain, compact = fals
             <CartesianGrid vertical={false} stroke="#e5e9e6" />
             <XAxis dataKey="date" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={32} />
             <YAxis tickFormatter={(value) => formatValuation(Number(value), metric.kind)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
-            <Tooltip formatter={(value) => formatValuation(Number(value), metric.kind)} labelFormatter={(value) => dateLabel(Number(value))} />
+            <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatValuation(Number(value), metric.kind)} labelFormatter={(value) => dateLabel(Number(value))} />
             {!compact && <Legend iconType="line" wrapperStyle={{ fontSize: 12 }} />}
             {equities.map((equity) => <Line
               key={equity.ticker}

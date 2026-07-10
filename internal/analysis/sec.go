@@ -31,7 +31,11 @@ var (
 		"PaymentsForAdditionsToPropertyPlantAndEquipment",
 		"PaymentsToAcquireProductiveAssets",
 	}
-	epsTags = []string{"EarningsPerShareDiluted"}
+	epsTags         = []string{"EarningsPerShareDiluted"}
+	predecessorCIKs = map[string][]int{
+		"GOOG":  {1288776},
+		"GOOGL": {1288776},
+	}
 )
 
 type SECClient struct {
@@ -115,6 +119,23 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 	if err != nil {
 		return nil, err
 	}
+	warnings := make([]string, 0)
+	for _, predecessorCIK := range predecessorCIKs[strings.ToUpper(ticker)] {
+		var predecessor companyFacts
+		predecessorID := fmt.Sprintf("%010d", predecessorCIK)
+		if err := c.getJSON(ctx, "/api/xbrl/companyfacts/CIK"+predecessorID+".json", &predecessor); err != nil {
+			warnings = append(warnings, fmt.Sprintf("SEC predecessor CIK %s: %v", predecessorID, err))
+			continue
+		}
+		olderAnnuals, annualErr := extractAnnuals(predecessor)
+		olderQuarterlies, quarterErr := extractQuarterlies(predecessor, predecessorID)
+		if annualErr != nil || quarterErr != nil {
+			warnings = append(warnings, fmt.Sprintf("SEC predecessor CIK %s could not be normalized", predecessorID))
+			continue
+		}
+		annuals = mergeAnnualHistory(olderAnnuals, annuals)
+		quarterlies = mergeQuarterlyHistory(olderQuarterlies, quarterlies)
+	}
 	annuals = mergeEstimates(annuals, existing.Annuals)
 	result := &model.Equity{
 		Ticker:      strings.ToUpper(ticker),
@@ -126,7 +147,7 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 		Quarterlies: quarterlies,
 		Current:     existing.Current,
 		Prices:      existing.Prices,
-		Warnings:    nil,
+		Warnings:    warnings,
 	}
 	if result.Company == "" {
 		result.Company = company.Title
@@ -140,6 +161,42 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 		}
 	}
 	return result, nil
+}
+
+func mergeAnnualHistory(groups ...[]model.AnnualPoint) []model.AnnualPoint {
+	byPeriod := make(map[string]model.AnnualPoint)
+	for _, rows := range groups {
+		for _, row := range rows {
+			current, exists := byPeriod[row.PeriodEnd]
+			if !exists || (row.FiledAt != "" && row.FiledAt < current.FiledAt) {
+				byPeriod[row.PeriodEnd] = row
+			}
+		}
+	}
+	out := make([]model.AnnualPoint, 0, len(byPeriod))
+	for _, row := range byPeriod {
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PeriodEnd < out[j].PeriodEnd })
+	return out
+}
+
+func mergeQuarterlyHistory(groups ...[]model.QuarterlyPoint) []model.QuarterlyPoint {
+	byPeriod := make(map[string]model.QuarterlyPoint)
+	for _, rows := range groups {
+		for _, row := range rows {
+			current, exists := byPeriod[row.PeriodEnd]
+			if !exists || (row.FiledAt != "" && row.FiledAt < current.FiledAt) {
+				byPeriod[row.PeriodEnd] = row
+			}
+		}
+	}
+	out := make([]model.QuarterlyPoint, 0, len(byPeriod))
+	for _, row := range byPeriod {
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].PeriodEnd < out[j].PeriodEnd })
+	return out
 }
 
 func (c *SECClient) lookup(ctx context.Context, ticker string) (companyTicker, error) {
@@ -263,10 +320,22 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		return nil, errors.New("SEC response has no us-gaap facts")
 	}
 	revenue := annualFacts(gaap, revenueTags, "USD")
+	operatingIncome := annualFacts(gaap, operatingIncomeTags, "USD")
+	da := annualFacts(gaap, daTags, "USD")
+	operatingCash := annualFacts(gaap, operatingCashTags, "USD")
 	netIncome := annualFacts(gaap, netIncomeTags, "USD")
 	capex := annualFacts(gaap, capexTags, "USD")
+	dividends := annualFacts(gaap, dividendTags, "USD")
 	eps := annualFacts(gaap, epsTags, "USD/shares")
-	normalizeEPSForSplits(eps, stockSplitEvents(gaap))
+	shares := annualFacts(gaap, shareTags, "shares")
+	splits := stockSplitEvents(gaap)
+	normalizeEPSForSplits(eps, splits)
+	normalizeAnnualSharesForSplits(shares, splits)
+	cash := annualInstantFacts(gaap, cashTags, "USD")
+	investments := annualInstantFacts(gaap, investmentTags, "USD")
+	currentDebt := annualInstantFacts(gaap, currentDebtTags, "USD")
+	noncurrentDebt := annualInstantFacts(gaap, noncurrentDebtTags, "USD")
+	totalDebt := annualInstantFacts(gaap, totalDebtTags, "USD")
 	anchors := revenue
 	if len(anchors) == 0 {
 		anchors = netIncome
@@ -284,6 +353,7 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		row := model.AnnualPoint{
 			FiscalYear: end.Year(),
 			PeriodEnd:  anchor.End,
+			FiledAt:    anchor.Filed,
 			Confidence: "high",
 		}
 		if value, ok := revenue[period]; ok {
@@ -292,18 +362,58 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		if value, ok := netIncome[period]; ok {
 			row.NetIncomeB = floatPtr(value.Val / 1e9)
 		}
+		if value, ok := operatingIncome[period]; ok {
+			row.EBITB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := da[period]; ok {
+			row.DAB = floatPtr(value.Val / 1e9)
+		}
+		if row.EBITB != nil && row.DAB != nil {
+			row.EBITDAB = floatPtr(*row.EBITB + *row.DAB)
+		}
+		if value, ok := operatingCash[period]; ok {
+			row.OperatingCashB = floatPtr(value.Val / 1e9)
+		}
 		if value, ok := capex[period]; ok {
 			row.CapexB = floatPtr(value.Val / 1e9)
+		}
+		if row.OperatingCashB != nil && row.CapexB != nil {
+			row.FCFB = floatPtr(*row.OperatingCashB - *row.CapexB)
+		}
+		if value, ok := dividends[period]; ok {
+			row.DividendsB = floatPtr(value.Val / 1e9)
+		} else if len(dividends) == 0 {
+			row.DividendsB = floatPtr(0)
 		}
 		if value, ok := eps[period]; ok {
 			row.DilutedEPS = floatPtr(value.Val)
 		}
+		if value, ok := shares[period]; ok {
+			row.DilutedSharesB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := cash[anchor.End]; ok {
+			row.CashB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := investments[anchor.End]; ok {
+			row.InvestmentsB = floatPtr(value.Val / 1e9)
+		}
+		if current, ok := currentDebt[anchor.End]; ok {
+			if noncurrent, exists := noncurrentDebt[anchor.End]; exists {
+				row.DebtB = floatPtr((current.Val + noncurrent.Val) / 1e9)
+			}
+		}
+		if row.DebtB == nil {
+			if value, ok := totalDebt[anchor.End]; ok {
+				row.DebtB = floatPtr(value.Val / 1e9)
+			}
+		}
+		liquidity := addKnown(row.CashB, row.InvestmentsB)
+		if row.DebtB != nil && liquidity != nil {
+			row.NetDebtB = floatPtr(*row.DebtB - *liquidity)
+		}
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].PeriodEnd < rows[j].PeriodEnd })
-	if len(rows) > 8 {
-		rows = rows[len(rows)-8:]
-	}
 	return rows, nil
 }
 
@@ -329,8 +439,28 @@ func annualFacts(gaap map[string]factConcept, tags []string, unit string) map[st
 			}
 			period := candidate.Start + "/" + candidate.End
 			current, exists := out[period]
-			if !exists || candidate.Filed > current.Filed {
+			if !exists || candidate.Filed < current.Filed {
 				out[period] = candidate
+			}
+		}
+	}
+	return out
+}
+
+func annualInstantFacts(gaap map[string]factConcept, tags []string, unit string) map[string]fact {
+	out := make(map[string]fact)
+	for _, tag := range tags {
+		concept, ok := gaap[tag]
+		if !ok {
+			continue
+		}
+		for _, candidate := range concept.Units[unit] {
+			if candidate.Start != "" || candidate.End == "" || candidate.Form != "10-K" || candidate.FP != "FY" {
+				continue
+			}
+			current, exists := out[candidate.End]
+			if !exists || candidate.Filed < current.Filed {
+				out[candidate.End] = candidate
 			}
 		}
 	}
@@ -400,6 +530,17 @@ func normalizeEPSForSplits(eps map[string]fact, splits []stockSplit) {
 			}
 		}
 		eps[period] = value
+	}
+}
+
+func normalizeAnnualSharesForSplits(shares map[string]fact, splits []stockSplit) {
+	for period, value := range shares {
+		for _, split := range splits {
+			if value.Filed != "" && value.Filed < split.date {
+				value.Val *= split.ratio
+			}
+		}
+		shares[period] = value
 	}
 }
 

@@ -3,10 +3,22 @@ export type MetricKey = "revenueB" | "capexB" | "netIncomeB" | "dilutedEps" | "p
 export interface AnnualPoint {
   fiscalYear: number;
   periodEnd?: string;
+  filedAt?: string;
   revenueB?: number;
+  ebitB?: number;
+  daB?: number;
+  ebitdaB?: number;
+  operatingCashB?: number;
   capexB?: number;
+  fcfB?: number;
+  dividendsB?: number;
   netIncomeB?: number;
   dilutedEps?: number;
+  dilutedSharesB?: number;
+  cashB?: number;
+  investmentsB?: number;
+  debtB?: number;
+  netDebtB?: number;
   peRatio?: number;
   estimate?: boolean;
   confidence?: string;

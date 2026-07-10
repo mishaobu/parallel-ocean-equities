@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyDomain, indexedPerformanceRows, macroHistoryRows, valuationHistoryRows } from "./historyData";
+import { historyDomain, indexedPerformanceRows, macroHistoryRows, valuationHistoryDomain, valuationHistoryRows } from "./historyData";
 import type { Equity } from "./types";
 import { valuationRows } from "./valuationData";
 
@@ -28,6 +28,12 @@ describe("historical chart data", () => {
       { date: Date.parse("2005-01-01"), AMZN: 1 },
       { date: Date.parse("2020-01-01"), AMZN: 3 },
     ]);
+  });
+
+  it("uses actual valuation coverage for the max valuation domain", () => {
+    const domain = valuationHistoryDomain(equities, "max", new Date("2026-07-10T00:00:00Z"));
+    expect(domain[0]).toBe(Date.parse("2010-01-01"));
+    expect(domain[1]).toBe(Date.parse("2026-07-10T00:00:00Z"));
   });
 
   it("selects forward values and respects the shared date domain", () => {

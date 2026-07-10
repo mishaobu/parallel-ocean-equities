@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mishaobu/parallel-ocean-equities/internal/model"
 )
 
 func TestExtractQuarterliesBuildsDiscreteQ4AndBalanceSheet(t *testing.T) {
@@ -126,7 +128,7 @@ func assertQuarterFact(t *testing.T, label string, actual quarterFact, expected 
 	}
 }
 
-func TestExtractAnnualsUsesLatestFilingAndMergesMetrics(t *testing.T) {
+func TestExtractAnnualsUsesFirstAvailableFilingAndMergesMetrics(t *testing.T) {
 	response := companyFacts{
 		EntityName: "Example Inc.",
 		Facts: map[string]map[string]factConcept{
@@ -151,8 +153,8 @@ func TestExtractAnnualsUsesLatestFilingAndMergesMetrics(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("expected one annual row, got %d", len(rows))
 	}
-	if rows[0].RevenueB == nil || *rows[0].RevenueB != 101 {
-		t.Fatalf("latest filing was not selected: %#v", rows[0].RevenueB)
+	if rows[0].RevenueB == nil || *rows[0].RevenueB != 100 || rows[0].FiledAt != "2024-02-01" {
+		t.Fatalf("first available filing was not selected: %#v", rows[0])
 	}
 	if rows[0].NetIncomeB == nil || *rows[0].NetIncomeB != 20 {
 		t.Fatalf("net income missing: %#v", rows[0].NetIncomeB)
@@ -217,6 +219,23 @@ func TestExtractAnnualsSupportsProductiveAssetCapex(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].CapexB == nil || *rows[0].CapexB != 7 {
 		t.Fatalf("productive-asset capex not extracted: %#v", rows)
+	}
+}
+
+func TestMergePredecessorFilingHistoryKeepsEarliestAvailability(t *testing.T) {
+	annuals := mergeAnnualHistory(
+		[]model.AnnualPoint{{PeriodEnd: "2010-12-31", FiledAt: "2011-02-01", RevenueB: floatPtr(10)}},
+		[]model.AnnualPoint{{PeriodEnd: "2010-12-31", FiledAt: "2012-02-01", RevenueB: floatPtr(11)}, {PeriodEnd: "2011-12-31", FiledAt: "2012-02-01"}},
+	)
+	if len(annuals) != 2 || annuals[0].RevenueB == nil || *annuals[0].RevenueB != 10 {
+		t.Fatalf("unexpected annual merge: %#v", annuals)
+	}
+	quarters := mergeQuarterlyHistory(
+		[]model.QuarterlyPoint{{PeriodEnd: "2010-03-31", FiledAt: "2010-05-01"}},
+		[]model.QuarterlyPoint{{PeriodEnd: "2010-03-31", FiledAt: "2011-05-01"}, {PeriodEnd: "2010-06-30", FiledAt: "2010-08-01"}},
+	)
+	if len(quarters) != 2 || quarters[0].FiledAt != "2010-05-01" {
+		t.Fatalf("unexpected quarterly merge: %#v", quarters)
 	}
 }
 

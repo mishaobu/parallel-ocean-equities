@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, Calculator, GitCompareArrows, Landmark, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
-import { historyDomain, type HistoryBasis, type HistoryRange } from "./historyData";
+import { historyDomain, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
@@ -140,8 +140,8 @@ function App() {
           <div className="view-toolbar">
             <div className="segmented" aria-label="View">
               <button type="button" className={mode === "compare" ? "is-active" : ""} onClick={() => setMode("compare")}><GitCompareArrows size={15} />Compare</button>
-              <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Financials</button>
-              <button type="button" className={mode === "models" ? "is-active" : ""} onClick={() => setMode("models")} disabled={!selectedEquity}><Calculator size={15} />Models</button>
+              <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Details</button>
+              <button type="button" className={mode === "models" ? "is-active" : ""} onClick={() => setMode("models")} disabled={!selectedEquity || selectedEquity.annuals.length === 0}><Calculator size={15} />Models</button>
             </div>
           </div>
 
@@ -167,15 +167,21 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
   }, [activeUniverse, equities]);
   const fundamentalEquities = useMemo(() => selectedEquities.filter((equity) => equity.annuals.length > 0), [selectedEquities]);
   const domain = useMemo(() => historyDomain(selectedEquities, macro?.points ?? [], range), [macro?.points, range, selectedEquities]);
+  const valuationDomain = useMemo(() => valuationHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
   return (
     <section className="view">
       <div className="view-title compare-title"><div><h1>Market history</h1><span>{selectedEquities.length} instruments / {domainLabel(domain)}</span></div>
-        <div className="segmented universe-switch" aria-label="Comparison universe">
-          {universes.map((candidate) => <button type="button" key={candidate.key} className={universe === candidate.key ? "is-active" : ""} onClick={() => setUniverse(candidate.key)}>{candidate.label}</button>)}
+        <div className="compare-controls">
+          <div className="segmented universe-switch" aria-label="Comparison universe">
+            {universes.map((candidate) => <button type="button" key={candidate.key} className={universe === candidate.key ? "is-active" : ""} onClick={() => setUniverse(candidate.key)}>{candidate.label}</button>)}
+          </div>
+          <div className="segmented compact-segmented" aria-label="History range">
+            {(["max", "25y", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+          </div>
         </div>
       </div>
       <PerformanceChart equities={selectedEquities} domain={domain} />
-      <div className="section-heading"><div><h2>Valuation history</h2><span>{fundamentalEquities.length} companies with filing data</span></div></div>
+      <div className="section-heading"><div><h2>Valuation history</h2><span>{fundamentalEquities.length} companies / filing-date coverage {domainLabel(valuationDomain)}</span></div></div>
       <div className="history-toolbar">
         <div className="metric-tabs valuation-tabs" aria-label="Valuation metric">
           {valuationRows.map((row) => <button type="button" key={row.key} className={valuationMetric === row.key ? "is-active" : ""} onClick={() => setValuationMetric(row.key)}>{row.label}</button>)}
@@ -183,17 +189,14 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
         <div className="history-switches">
           <div className="segmented compact-segmented" aria-label="Valuation basis">
             <button type="button" className={basis === "actual" ? "is-active" : ""} onClick={() => setBasis("actual")}>LTM</button>
-            <button type="button" className={basis === "forward" ? "is-active" : ""} onClick={() => setBasis("forward")}>Forward</button>
-          </div>
-          <div className="segmented compact-segmented" aria-label="History range">
-            {(["max", "25y", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+            <button type="button" className={basis === "forward" ? "is-active" : ""} onClick={() => setBasis("forward")}>N12M realized</button>
           </div>
         </div>
       </div>
-      <ValuationHistoryCharts equities={fundamentalEquities} metric={valuationMetric} basis={basis} domain={domain} />
+      <ValuationHistoryCharts equities={fundamentalEquities} metric={valuationMetric} basis={basis} domain={valuationDomain} />
       <div className="section-heading"><div><h2>Monetary context</h2><span>Monthly FRED series / <a href="/monetary/">open full analysis</a></span></div></div>
       <MacroCharts macro={macro} domain={domain} />
-      <div className="section-heading"><div><h2>Current valuation</h2><span>LTM and forward snapshot</span></div></div>
+      <div className="section-heading"><div><h2>Current valuation</h2><span>Sortable LTM and internal model snapshot</span></div></div>
       <ValuationMatrix equities={fundamentalEquities} />
       <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
       <div className="metric-tabs annual-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => onMetric(key)}>{metricLabels[key]}</button>)}</div>
@@ -220,9 +223,9 @@ function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; 
       {equity.annuals.length === 0 && equity.prices?.length ? <MarketOnlyView equity={equity} /> : equity.annuals.length === 0 ? <Pending equity={equity} /> : <>
         <div className="metric-strip">
           <Metric label="Price" value={money(equity.current.price)} context={equity.current.return1Y === undefined ? "1Y n/a" : `${percent(equity.current.return1Y)} 1Y`} valueTone={tone(equity.current.return1Y)} />
-          <Metric label="P/E" value={formatValuation(equity.valuation?.pe, peRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardPe, peRow.kind)}`} />
-          <Metric label="EV / EBITDA" value={formatValuation(equity.valuation?.evToEbitda, ebitdaRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardEvToEbitda, ebitdaRow.kind)}`} />
-          <Metric label="FCF / market cap" value={formatValuation(equity.valuation?.fcfToMarketCap, fcfRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardFcfToMarketCap, fcfRow.kind)}`} />
+          <Metric label="P/E" value={formatValuation(equity.valuation?.pe, peRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardPe, peRow.kind)}`} />
+          <Metric label="EV / EBITDA" value={formatValuation(equity.valuation?.evToEbitda, ebitdaRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardEvToEbitda, ebitdaRow.kind)}`} />
+          <Metric label="FCF / market cap" value={formatValuation(equity.valuation?.fcfToMarketCap, fcfRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardFcfToMarketCap, fcfRow.kind)}`} />
         </div>
         {loading && !(equity.quarterlies?.length) ? <PendingDetail ticker={equity.ticker} /> : <>
           <div className="section-heading"><div><h2>Quarterly trajectories</h2><span>{equity.quarterlies?.length ?? 0} persisted periods</span></div></div>
