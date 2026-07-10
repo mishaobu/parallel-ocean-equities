@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,10 +30,12 @@ type EquityService interface {
 }
 
 type Config struct {
-	BasePath     string
-	StaticDir    string
-	RefreshToken string
-	Logger       *slog.Logger
+	BasePath          string
+	StaticDir         string
+	MonetaryPath      string
+	MonetaryStaticDir string
+	RefreshToken      string
+	Logger            *slog.Logger
 }
 
 type Server struct {
@@ -46,6 +49,10 @@ func New(service EquityService, config Config) *Server {
 	config.BasePath = "/" + strings.Trim(strings.TrimSpace(config.BasePath), "/")
 	if config.BasePath == "/" {
 		config.BasePath = "/equities"
+	}
+	config.MonetaryPath = "/" + strings.Trim(strings.TrimSpace(config.MonetaryPath), "/")
+	if config.MonetaryPath == "/" {
+		config.MonetaryPath = "/monetary"
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -76,7 +83,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE "+base+"/api/tickers/{ticker}", s.handleDeleteTicker)
 	s.mux.HandleFunc("POST "+base+"/api/tickers/{ticker}/refresh", s.handleRefreshTicker)
 	s.mux.HandleFunc("GET "+base, s.handleBaseRedirect)
-	s.mux.HandleFunc("GET "+base+"/", s.handleStatic)
+	s.mux.HandleFunc("GET "+base+"/", func(w http.ResponseWriter, r *http.Request) {
+		s.serveStatic(w, r, base, s.config.StaticDir)
+	})
+	if s.config.MonetaryStaticDir != "" && s.config.MonetaryPath != base {
+		monetary := s.config.MonetaryPath
+		s.mux.HandleFunc("GET "+monetary, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, monetary+"/", http.StatusPermanentRedirect)
+		})
+		s.mux.HandleFunc("GET "+monetary+"/", func(w http.ResponseWriter, r *http.Request) {
+			s.serveStatic(w, r, monetary, s.config.MonetaryStaticDir)
+		})
+	}
 	s.mux.HandleFunc("GET /", s.handleRoot)
 }
 
@@ -99,12 +117,36 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	state := s.service.Snapshot()
 	for _, equity := range state.Tickers {
 		equity.Quarterlies = nil
-		equity.Prices = nil
+		equity.Prices = compactPrices(equity.Prices)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":   state,
 		"runtime": s.service.Stats(),
 	})
+}
+
+func compactPrices(rows []model.PricePoint) []model.PricePoint {
+	byQuarter := make(map[string]model.PricePoint)
+	for _, row := range rows {
+		date, err := time.Parse("2006-01-02", row.Date)
+		if err != nil {
+			continue
+		}
+		quarter := fmt.Sprintf("%04d-Q%d", date.Year(), (int(date.Month())-1)/3+1)
+		if current, exists := byQuarter[quarter]; !exists || row.Date > current.Date {
+			byQuarter[quarter] = row
+		}
+	}
+	keys := make([]string, 0, len(byQuarter))
+	for key := range byQuarter {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]model.PricePoint, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, byQuarter[key])
+	}
+	return out
 }
 
 func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
@@ -216,8 +258,8 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.config.BasePath+"/", http.StatusTemporaryRedirect)
 }
 
-func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	relative := strings.TrimPrefix(r.URL.Path, s.config.BasePath)
+func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, basePath, staticDir string) {
+	relative := strings.TrimPrefix(r.URL.Path, basePath)
 	relative = strings.TrimPrefix(relative, "/")
 	if relative == "" {
 		relative = "index.html"
@@ -227,7 +269,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	target := filepath.Join(s.config.StaticDir, clean)
+	target := filepath.Join(staticDir, clean)
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
 		if strings.Contains(filepath.Base(target), ".") && filepath.Base(target) != "index.html" {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
@@ -238,7 +280,7 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFile(w, r, filepath.Join(s.config.StaticDir, "index.html"))
+	http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {

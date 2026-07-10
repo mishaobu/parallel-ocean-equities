@@ -17,7 +17,7 @@ import (
 	"github.com/mishaobu/parallel-ocean-equities/internal/model"
 )
 
-const fredStartDate = "2000-01-01"
+const fredStartDate = "1960-01-01"
 
 var fredSeriesIDs = []string{
 	"CPIAUCSL",
@@ -28,6 +28,29 @@ var fredSeriesIDs = []string{
 	"M2SL",
 	"WALCL",
 	"BAMLC0A0CM",
+	"USREC",
+	"UNRATE",
+	"GDPC1",
+	"INDPRO",
+	"T10YIE",
+	"MORTGAGE30US",
+	"NFCI",
+	"DTWEXBGS",
+	"VIXCLS",
+	"BAMLH0A0HYM2",
+	"BOGMBASE",
+	"TOTRESNS",
+	"RRPONTSYD",
+}
+
+var requiredFREDSeries = map[string]bool{
+	"CPIAUCSL": true,
+	"FEDFUNDS": true,
+	"GS2":      true,
+	"GS10":     true,
+	"M1SL":     true,
+	"M2SL":     true,
+	"WALCL":    true,
 }
 
 type MacroAnalyzer interface {
@@ -65,28 +88,45 @@ func (f *FREDClient) Analyze(ctx context.Context) (model.MacroSeries, error) {
 	fetchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan result, len(fredSeriesIDs))
+	slots := make(chan struct{}, 6)
 	for _, id := range fredSeriesIDs {
 		go func() {
+			select {
+			case <-fetchCtx.Done():
+				results <- result{id: id, err: fetchCtx.Err()}
+				return
+			case slots <- struct{}{}:
+			}
+			defer func() { <-slots }()
 			values, err := f.fetch(fetchCtx, id)
 			results <- result{id: id, values: values, err: err}
 		}()
 	}
+	warnings := make([]string, 0)
 	for range fredSeriesIDs {
 		fetched := <-results
 		if fetched.err != nil {
-			cancel()
-			return model.MacroSeries{}, fetched.err
+			if requiredFREDSeries[fetched.id] {
+				cancel()
+				return model.MacroSeries{}, fetched.err
+			}
+			warnings = append(warnings, fetched.err.Error())
+			continue
 		}
 		series[fetched.id] = fetched.values
 	}
+	sort.Strings(warnings)
 
-	sources := make([]string, 0, len(fredSeriesIDs))
+	sources := make([]string, 0, len(series))
 	for _, id := range fredSeriesIDs {
-		sources = append(sources, "FRED:"+id)
+		if len(series[id]) > 0 {
+			sources = append(sources, "FRED:"+id)
+		}
 	}
 	return model.MacroSeries{
 		UpdatedAt: time.Now().UTC(),
 		Sources:   sources,
+		Warnings:  warnings,
 		Points:    buildMacroPoints(series),
 	}, nil
 }
@@ -182,19 +222,35 @@ func buildMacroPoints(series map[string]map[string]float64) []model.MacroPoint {
 	points := make([]model.MacroPoint, 0, len(ordered))
 	for _, month := range ordered {
 		point := model.MacroPoint{
-			Date:            month + "-01",
-			Inflation:       yearOverYear(series["CPIAUCSL"], month),
-			FedFunds:        valueAt(series["FEDFUNDS"], month),
-			Treasury2Y:      valueAt(series["GS2"], month),
-			Treasury10Y:     valueAt(series["GS10"], month),
-			LogM1:           logValue(series["M1SL"], month, 1),
-			LogM2:           logValue(series["M2SL"], month, 1),
-			LogFedAssets:    logValue(series["WALCL"], month, 1000),
-			M1Growth:        yearOverYear(series["M1SL"], month),
-			M2Growth:        yearOverYear(series["M2SL"], month),
-			CorporateSpread: valueAt(series["BAMLC0A0CM"], month),
+			Date:                month + "-01",
+			Inflation:           yearOverYear(series["CPIAUCSL"], month),
+			FedFunds:            valueAt(series["FEDFUNDS"], month),
+			Treasury2Y:          valueAt(series["GS2"], month),
+			Treasury10Y:         valueAt(series["GS10"], month),
+			Breakeven10Y:        valueAt(series["T10YIE"], month),
+			Mortgage30Y:         valueAt(series["MORTGAGE30US"], month),
+			LogM1:               logValue(series["M1SL"], month, 1),
+			LogM2:               logValue(series["M2SL"], month, 1),
+			LogFedAssets:        logValue(series["WALCL"], month, 1000),
+			LogMonetaryBase:     logValue(series["BOGMBASE"], month, 1000),
+			LogBankReserves:     logValue(series["TOTRESNS"], month, 1000),
+			M1Growth:            yearOverYear(series["M1SL"], month),
+			M2Growth:            yearOverYear(series["M2SL"], month),
+			FedAssetsGrowth:     yearOverYear(series["WALCL"], month),
+			MonetaryBaseGrowth:  yearOverYear(series["BOGMBASE"], month),
+			ReverseRepoB:        valueAt(series["RRPONTSYD"], month),
+			RealGDPGrowth:       yearOverYear(series["GDPC1"], month),
+			IndustrialGrowth:    yearOverYear(series["INDPRO"], month),
+			Unemployment:        valueAt(series["UNRATE"], month),
+			FinancialConditions: valueAt(series["NFCI"], month),
+			DollarIndex:         valueAt(series["DTWEXBGS"], month),
+			VIX:                 valueAt(series["VIXCLS"], month),
+			CorporateSpread:     valueAt(series["BAMLC0A0CM"], month),
+			HighYieldSpread:     valueAt(series["BAMLH0A0HYM2"], month),
+			Recession:           valueAt(series["USREC"], month),
 		}
 		point.RealPolicyRate = difference(point.FedFunds, point.Inflation)
+		point.Real10Y = difference(point.Treasury10Y, point.Breakeven10Y)
 		point.YieldCurve = difference(point.Treasury10Y, point.Treasury2Y)
 		points = append(points, point)
 	}

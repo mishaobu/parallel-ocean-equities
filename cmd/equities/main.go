@@ -52,10 +52,12 @@ func main() {
 	}
 
 	handler := server.New(service, server.Config{
-		BasePath:     env("BASE_PATH", "/equities"),
-		StaticDir:    env("STATIC_DIR", "/app/web"),
-		RefreshToken: os.Getenv("REFRESH_TOKEN"),
-		Logger:       logger,
+		BasePath:          env("BASE_PATH", "/equities"),
+		StaticDir:         env("STATIC_DIR", "/app/web"),
+		MonetaryPath:      env("MONETARY_PATH", "/monetary"),
+		MonetaryStaticDir: env("MONETARY_STATIC_DIR", "/app/monetary"),
+		RefreshToken:      os.Getenv("REFRESH_TOKEN"),
+		Logger:            logger,
 	})
 	httpServer := &http.Server{
 		Addr:              ":" + env("PORT", "8080"),

@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 3
+const StateVersion = 4
 
 type AnnualPoint struct {
 	FiscalYear int      `json:"fiscalYear"`
@@ -97,24 +97,41 @@ type ValuationPoint struct {
 }
 
 type MacroPoint struct {
-	Date            string   `json:"date"`
-	Inflation       *float64 `json:"inflation,omitempty"`
-	FedFunds        *float64 `json:"fedFunds,omitempty"`
-	Treasury2Y      *float64 `json:"treasury2Y,omitempty"`
-	Treasury10Y     *float64 `json:"treasury10Y,omitempty"`
-	RealPolicyRate  *float64 `json:"realPolicyRate,omitempty"`
-	YieldCurve      *float64 `json:"yieldCurve,omitempty"`
-	LogM1           *float64 `json:"logM1,omitempty"`
-	LogM2           *float64 `json:"logM2,omitempty"`
-	LogFedAssets    *float64 `json:"logFedAssets,omitempty"`
-	M1Growth        *float64 `json:"m1Growth,omitempty"`
-	M2Growth        *float64 `json:"m2Growth,omitempty"`
-	CorporateSpread *float64 `json:"corporateSpread,omitempty"`
+	Date                string   `json:"date"`
+	Inflation           *float64 `json:"inflation,omitempty"`
+	FedFunds            *float64 `json:"fedFunds,omitempty"`
+	Treasury2Y          *float64 `json:"treasury2Y,omitempty"`
+	Treasury10Y         *float64 `json:"treasury10Y,omitempty"`
+	RealPolicyRate      *float64 `json:"realPolicyRate,omitempty"`
+	Real10Y             *float64 `json:"real10Y,omitempty"`
+	YieldCurve          *float64 `json:"yieldCurve,omitempty"`
+	Breakeven10Y        *float64 `json:"breakeven10Y,omitempty"`
+	Mortgage30Y         *float64 `json:"mortgage30Y,omitempty"`
+	LogM1               *float64 `json:"logM1,omitempty"`
+	LogM2               *float64 `json:"logM2,omitempty"`
+	LogFedAssets        *float64 `json:"logFedAssets,omitempty"`
+	LogMonetaryBase     *float64 `json:"logMonetaryBase,omitempty"`
+	LogBankReserves     *float64 `json:"logBankReserves,omitempty"`
+	M1Growth            *float64 `json:"m1Growth,omitempty"`
+	M2Growth            *float64 `json:"m2Growth,omitempty"`
+	FedAssetsGrowth     *float64 `json:"fedAssetsGrowth,omitempty"`
+	MonetaryBaseGrowth  *float64 `json:"monetaryBaseGrowth,omitempty"`
+	ReverseRepoB        *float64 `json:"reverseRepoB,omitempty"`
+	RealGDPGrowth       *float64 `json:"realGdpGrowth,omitempty"`
+	IndustrialGrowth    *float64 `json:"industrialGrowth,omitempty"`
+	Unemployment        *float64 `json:"unemployment,omitempty"`
+	FinancialConditions *float64 `json:"financialConditions,omitempty"`
+	DollarIndex         *float64 `json:"dollarIndex,omitempty"`
+	VIX                 *float64 `json:"vix,omitempty"`
+	CorporateSpread     *float64 `json:"corporateSpread,omitempty"`
+	HighYieldSpread     *float64 `json:"highYieldSpread,omitempty"`
+	Recession           *float64 `json:"recession,omitempty"`
 }
 
 type MacroSeries struct {
 	UpdatedAt time.Time    `json:"updatedAt,omitempty"`
 	Sources   []string     `json:"sources,omitempty"`
+	Warnings  []string     `json:"warnings,omitempty"`
 	Error     string       `json:"error,omitempty"`
 	Points    []MacroPoint `json:"points,omitempty"`
 }
@@ -161,22 +178,23 @@ type CurrentMetrics struct {
 }
 
 type Equity struct {
-	Ticker      string           `json:"ticker"`
-	Company     string           `json:"company,omitempty"`
-	CIK         string           `json:"cik,omitempty"`
-	Status      string           `json:"status"`
-	Error       string           `json:"error,omitempty"`
-	Warnings    []string         `json:"warnings,omitempty"`
-	UpdatedAt   time.Time        `json:"updatedAt,omitempty"`
-	Sources     []string         `json:"sources,omitempty"`
-	Annuals     []AnnualPoint    `json:"annuals"`
-	Quarterlies []QuarterlyPoint `json:"quarterlies,omitempty"`
-	Prices      []PricePoint     `json:"prices,omitempty"`
-	Current     CurrentMetrics   `json:"current"`
-	Valuation   ValuationMetrics `json:"valuation"`
-	Forecast    ForecastModel    `json:"forecast"`
-	Models      ValuationModels  `json:"models"`
-	Valuations  []ValuationPoint `json:"valuations,omitempty"`
+	Ticker         string           `json:"ticker"`
+	Company        string           `json:"company,omitempty"`
+	InstrumentType string           `json:"instrumentType,omitempty"`
+	CIK            string           `json:"cik,omitempty"`
+	Status         string           `json:"status"`
+	Error          string           `json:"error,omitempty"`
+	Warnings       []string         `json:"warnings,omitempty"`
+	UpdatedAt      time.Time        `json:"updatedAt,omitempty"`
+	Sources        []string         `json:"sources,omitempty"`
+	Annuals        []AnnualPoint    `json:"annuals"`
+	Quarterlies    []QuarterlyPoint `json:"quarterlies,omitempty"`
+	Prices         []PricePoint     `json:"prices,omitempty"`
+	Current        CurrentMetrics   `json:"current"`
+	Valuation      ValuationMetrics `json:"valuation"`
+	Forecast       ForecastModel    `json:"forecast"`
+	Models         ValuationModels  `json:"models"`
+	Valuations     []ValuationPoint `json:"valuations,omitempty"`
 }
 
 type State struct {

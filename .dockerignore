@@ -3,4 +3,6 @@
 runtime
 web/dist
 web/node_modules
+monetary/dist
+monetary/node_modules
 *.md

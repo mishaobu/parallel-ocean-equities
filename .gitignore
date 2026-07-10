@@ -8,4 +8,9 @@ web/node_modules/
 web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+monetary/dist/
+monetary/node_modules/
+monetary/*.tsbuildinfo
+monetary/vite.config.js
+monetary/vite.config.d.ts
 /equities

@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +45,30 @@ func TestCompositeMarketPrefersFirstProviderWithDecadeCoverage(t *testing.T) {
 	}
 	if source != "long" || len(rows) != 2 || unused.called {
 		t.Fatalf("source=%q rows=%v unused.called=%v", source, rows, unused.called)
+	}
+}
+
+func TestPipelineBuildsMarketOnlyInstrumentWithoutSEC(t *testing.T) {
+	market := &fakeMarketProvider{
+		rows:   []model.PricePoint{{Date: "2000-01-31", Close: 10}, {Date: "2026-01-31", Close: 50}},
+		source: "fixture",
+	}
+	result, err := (&Pipeline{Market: market}).Analyze(context.Background(), "005930.KS", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Company != "Samsung Electronics Co., Ltd." || result.InstrumentType != "International equity" {
+		t.Fatalf("unexpected profile: %+v", result)
+	}
+	if result.Status != "ready" || len(result.Prices) != 2 || result.Current.Price == nil {
+		t.Fatalf("unexpected market result: %+v", result)
+	}
+}
+
+func TestPipelineRequiresMarketDataForMarketOnlyInstrument(t *testing.T) {
+	_, err := (&Pipeline{}).Analyze(context.Background(), "SPY", nil)
+	if !errors.Is(err, ErrNoMarketProvider) {
+		t.Fatalf("expected ErrNoMarketProvider, got %v", err)
 	}
 }
 

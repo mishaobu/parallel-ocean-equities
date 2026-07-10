@@ -1,6 +1,6 @@
 # Parallel Ocean Equities
 
-Chart-first equity fundamentals and valuation workspace served at `/equities`. The repository is self-contained: React/Vite static UI, Go API and refresh workers, seed data, container image, tests, and deployment CI.
+Chart-first equity fundamentals and valuation workspace served at `/equities`, with a standalone monetary-regime workspace at `/monetary`. The repository is self-contained: two React/Vite frontends, one Go API and refresh service, seed data, container image, tests, and deployment CI.
 
 ## Data flow
 
@@ -12,7 +12,7 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`. T
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
 
-The landing view charts all seven valuation measures on a shared 2000-present timeline with synchronized macro panels. The comparison response omits raw quarterly and price arrays to keep polling small. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and detailed statement history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
+The landing view charts indexed market performance and all seven valuation measures on a shared timeline with synchronized macro panels. The comparison response omits quarterly filing arrays and reduces monthly prices to quarter-end snapshots. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and full monthly market history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
 
 ## Local run
 
@@ -21,6 +21,8 @@ make run
 ```
 
 Open `http://localhost:8080/equities/`.
+
+The monetary workspace is available at `http://localhost:8080/monetary/`. It uses the same persisted FRED series through the equities state API while keeping its own frontend bundle and route.
 
 ## Configuration
 

@@ -1,9 +1,8 @@
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { valuationHistoryRows, type HistoryBasis } from "../historyData";
+import { equityColor } from "../colors";
 import type { Equity } from "../types";
 import { formatValuation, valuationRows, type ValuationMetricKey, type ValuationRow } from "../valuationData";
-
-const colors = ["#176b4d", "#2962a3", "#b46016", "#7047a3", "#a3304d", "#087b84"];
 
 interface Props {
   equities: Equity[];
@@ -40,12 +39,12 @@ function ValuationHistoryChart({ equities, metric, basis, domain, compact = fals
             <YAxis tickFormatter={(value) => formatValuation(Number(value), metric.kind)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
             <Tooltip formatter={(value) => formatValuation(Number(value), metric.kind)} labelFormatter={(value) => dateLabel(Number(value))} />
             {!compact && <Legend iconType="line" wrapperStyle={{ fontSize: 12 }} />}
-            {equities.map((equity, index) => <Line
+            {equities.map((equity) => <Line
               key={equity.ticker}
               type="monotone"
               dataKey={equity.ticker}
               name={equity.ticker}
-              stroke={colors[index % colors.length]}
+              stroke={equityColor(equity.ticker)}
               strokeWidth={compact ? 1.8 : 2.2}
               dot={false}
               activeDot={{ r: 4 }}

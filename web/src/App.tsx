@@ -1,11 +1,12 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Calculator, GitCompareArrows, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
+import { BarChart3, Calculator, GitCompareArrows, Landmark, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
 import { historyDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
+import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
 import { BalanceSheetChart, QuarterlyChart } from "./components/QuarterlyCharts";
 import { QuarterlyTable } from "./components/QuarterlyTable";
@@ -18,6 +19,14 @@ import { formatValuation, valuationRows, type ValuationMetricKey } from "./valua
 
 const metrics: MetricKey[] = ["revenueB", "capexB", "netIncomeB", "dilutedEps", "peRatio"];
 type ViewMode = "compare" | "ticker" | "models";
+type UniverseKey = "core" | "compute" | "asia" | "all";
+
+const universes: { key: UniverseKey; label: string; tickers: string[] }[] = [
+  { key: "core", label: "Core", tickers: ["AMZN", "GOOGL", "META", "MSFT", "SPY", "QQQ"] },
+  { key: "compute", label: "Compute", tickers: ["AMD", "NVDA", "MU", "SMCI", "DELL", "QQQ"] },
+  { key: "asia", label: "Asia / ADR", tickers: ["005930.KS", "BABA", "JD", "QQQ"] },
+  { key: "all", label: "All", tickers: [] },
+];
 
 function App() {
   const [payload, setPayload] = useState<StateResponse | null>(null);
@@ -114,7 +123,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><BarChart3 size={21} /><strong>Equities</strong><span>parallel-ocean</span></div>
+        <div className="brand"><BarChart3 size={21} /><strong>Equities</strong><a href="/monetary/"><Landmark size={14} />Monetary</a><span>parallel-ocean</span></div>
         <form className="ticker-form" onSubmit={addTicker}>
           <label htmlFor="ticker-input">Add ticker</label>
           <input id="ticker-input" value={input} onChange={(event) => setInput(event.target.value.toUpperCase())} placeholder="NVDA" maxLength={10} autoComplete="off" />
@@ -149,10 +158,24 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
   const [basis, setBasis] = useState<HistoryBasis>("actual");
   const [range, setRange] = useState<HistoryRange>("max");
   const [valuationMetric, setValuationMetric] = useState<ValuationMetricKey>("pe");
-  const domain = useMemo(() => historyDomain(equities, macro?.points ?? [], range), [equities, macro?.points, range]);
+  const [universe, setUniverse] = useState<UniverseKey>("core");
+  const activeUniverse = universes.find((candidate) => candidate.key === universe) ?? universes[0];
+  const selectedEquities = useMemo(() => {
+    if (activeUniverse.key === "all") return equities;
+    const members = new Set(activeUniverse.tickers);
+    return equities.filter((equity) => members.has(equity.ticker));
+  }, [activeUniverse, equities]);
+  const fundamentalEquities = useMemo(() => selectedEquities.filter((equity) => equity.annuals.length > 0), [selectedEquities]);
+  const domain = useMemo(() => historyDomain(selectedEquities, macro?.points ?? [], range), [macro?.points, range, selectedEquities]);
   return (
     <section className="view">
-      <div className="view-title"><div><h1>Valuation history</h1><span>{equities.length} tickers / {domainLabel(domain)}</span></div></div>
+      <div className="view-title compare-title"><div><h1>Market history</h1><span>{selectedEquities.length} instruments / {domainLabel(domain)}</span></div>
+        <div className="segmented universe-switch" aria-label="Comparison universe">
+          {universes.map((candidate) => <button type="button" key={candidate.key} className={universe === candidate.key ? "is-active" : ""} onClick={() => setUniverse(candidate.key)}>{candidate.label}</button>)}
+        </div>
+      </div>
+      <PerformanceChart equities={selectedEquities} domain={domain} />
+      <div className="section-heading"><div><h2>Valuation history</h2><span>{fundamentalEquities.length} companies with filing data</span></div></div>
       <div className="history-toolbar">
         <div className="metric-tabs valuation-tabs" aria-label="Valuation metric">
           {valuationRows.map((row) => <button type="button" key={row.key} className={valuationMetric === row.key ? "is-active" : ""} onClick={() => setValuationMetric(row.key)}>{row.label}</button>)}
@@ -163,20 +186,20 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
             <button type="button" className={basis === "forward" ? "is-active" : ""} onClick={() => setBasis("forward")}>Forward</button>
           </div>
           <div className="segmented compact-segmented" aria-label="History range">
-            {(["max", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+            {(["max", "25y", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
           </div>
         </div>
       </div>
-      <ValuationHistoryCharts equities={equities} metric={valuationMetric} basis={basis} domain={domain} />
-      <div className="section-heading"><div><h2>Monetary context</h2><span>Monthly FRED series / synchronized timeline</span></div></div>
+      <ValuationHistoryCharts equities={fundamentalEquities} metric={valuationMetric} basis={basis} domain={domain} />
+      <div className="section-heading"><div><h2>Monetary context</h2><span>Monthly FRED series / <a href="/monetary/">open full analysis</a></span></div></div>
       <MacroCharts macro={macro} domain={domain} />
       <div className="section-heading"><div><h2>Current valuation</h2><span>LTM and forward snapshot</span></div></div>
-      <ValuationMatrix equities={equities} />
+      <ValuationMatrix equities={fundamentalEquities} />
       <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
       <div className="metric-tabs annual-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => onMetric(key)}>{metricLabels[key]}</button>)}</div>
-      <MetricChart equities={equities} metric={metric} />
+      <MetricChart equities={fundamentalEquities} metric={metric} />
       <div className="small-multiples">
-        {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={equities} metric={key} compact />)}
+        {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={fundamentalEquities} metric={key} compact />)}
       </div>
     </section>
   );
@@ -194,7 +217,7 @@ function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; 
     <section className="view">
       <TickerTitle equity={equity} onRefresh={onRefresh} onRemove={onRemove} />
       {equity.status === "error" && <div className="inline-error">{equity.error}</div>}
-      {equity.annuals.length === 0 ? <Pending equity={equity} /> : <>
+      {equity.annuals.length === 0 && equity.prices?.length ? <MarketOnlyView equity={equity} /> : equity.annuals.length === 0 ? <Pending equity={equity} /> : <>
         <div className="metric-strip">
           <Metric label="Price" value={money(equity.current.price)} context={equity.current.return1Y === undefined ? "1Y n/a" : `${percent(equity.current.return1Y)} 1Y`} valueTone={tone(equity.current.return1Y)} />
           <Metric label="P/E" value={formatValuation(equity.valuation?.pe, peRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardPe, peRow.kind)}`} />
@@ -221,6 +244,22 @@ function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; 
   );
 }
 
+function MarketOnlyView({ equity }: { equity: Equity }) {
+  const latest = equity.prices?.[equity.prices.length - 1];
+  const first = equity.prices?.[0];
+  const totalReturn = first && latest && first.close > 0 ? latest.close / first.close - 1 : undefined;
+  return <>
+    <div className="metric-strip market-metric-strip">
+      <Metric label="Price" value={money(equity.current.price)} context={equity.current.priceAsOf || "latest close"} />
+      <Metric label="1 year" value={percent(equity.current.return1Y)} context="price return" valueTone={tone(equity.current.return1Y)} />
+      <Metric label="52 week high" value={money(equity.current.high52Week)} context={equity.current.low52Week === undefined ? "range unavailable" : `Low ${money(equity.current.low52Week)}`} />
+      <Metric label="Full history" value={percent(totalReturn)} context={first ? `since ${first.date.slice(0, 4)}` : "history pending"} valueTone={tone(totalReturn)} />
+    </div>
+    <div className="section-heading"><div><h2>Market history</h2><span>{equity.prices?.length ?? 0} monthly observations</span></div></div>
+    <PriceChart equity={equity} />
+  </>;
+}
+
 function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
   return (
     <section className="view">
@@ -232,7 +271,7 @@ function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
 
 function TickerTitle({ equity, onRefresh, onRemove }: { equity: Equity; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
   return <div className="view-title ticker-title">
-    <div><h1>{equity.ticker} <span>{equity.company}</span></h1><small>{equity.sources?.join(" + ") || "Analysis pending"} · {analysisDate(equity)}</small></div>
+    <div><h1>{equity.ticker} <span>{equity.company}</span></h1><small>{equity.instrumentType ? `${equity.instrumentType} · ` : ""}{equity.sources?.join(" + ") || "Analysis pending"} · {analysisDate(equity)}</small></div>
     <div className="icon-actions">
       <button type="button" onClick={() => void onRefresh(equity.ticker)} disabled={equity.status === "refreshing"} aria-label={`Refresh ${equity.ticker}`} title="Refresh analysis"><RefreshCw size={17} className={equity.status === "refreshing" ? "spin" : ""} /></button>
       <button type="button" onClick={() => void onRemove(equity.ticker)} aria-label={`Remove ${equity.ticker}`} title="Remove ticker"><Trash2 size={17} /></button>

@@ -14,7 +14,7 @@ import (
 	"github.com/mishaobu/parallel-ocean-equities/internal/store"
 )
 
-var tickerPattern = regexp.MustCompile(`^[A-Z][A-Z0-9.-]{0,9}$`)
+var tickerPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,9}$`)
 
 type Analyzer interface {
 	Analyze(context.Context, string, *model.Equity) (*model.Equity, error)

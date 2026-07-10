@@ -33,6 +33,8 @@ func TestFREDClientBuildsDerivedMacroSeries(t *testing.T) {
 			fmt.Fprintln(w, "2025-01-01,4.4")
 		case "BAMLC0A0CM":
 			fmt.Fprintln(w, "2025-01-01,1.1")
+		default:
+			fmt.Fprintln(w, "2025-01-01,1")
 		}
 	}))
 	defer server.Close()
@@ -50,9 +52,34 @@ func TestFREDClientBuildsDerivedMacroSeries(t *testing.T) {
 	assertClose(t, "inflation", latest.Inflation, 3)
 	assertClose(t, "real policy rate", latest.RealPolicyRate, 1.5)
 	assertClose(t, "yield curve", latest.YieldCurve, 0.4)
+	assertClose(t, "real 10Y", latest.Real10Y, 3.4)
 	assertClose(t, "M1 growth", latest.M1Growth, 10)
 	assertClose(t, "M2 growth", latest.M2Growth, 10)
 	assertClose(t, "Fed assets log", latest.LogFedAssets, math.Log10(8000))
+}
+
+func TestFREDClientKeepsOptionalSeriesFailureAsWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "VIXCLS" {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintf(w, "DATE,%s\n2025-01-01,1\n", id)
+	}))
+	defer server.Close()
+	client := NewFREDClient("test", server.Client())
+	client.baseURL = server.URL
+	series, err := client.Analyze(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series.Warnings) != 1 || !strings.Contains(series.Warnings[0], "VIXCLS") {
+		t.Fatalf("warnings = %v", series.Warnings)
+	}
+	if len(series.Points) != 1 || series.Points[0].VIX != nil {
+		t.Fatalf("unexpected points: %#v", series.Points)
+	}
 }
 
 func TestDecodeFREDCSVUsesLastObservationInMonth(t *testing.T) {

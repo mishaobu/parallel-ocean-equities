@@ -1,0 +1,85 @@
+:root {
+  color: #17201b;
+  background: #f3f5f3;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button { color: inherit; font: inherit; }
+.macro-app { min-height: 100vh; }
+.topbar { height: 60px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 20px; padding: 0 24px; border-top: 4px solid #17201b; border-bottom: 1px solid #d4dcd6; background: #fff; }
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.brand strong { font-size: 17px; }
+.brand span { padding-left: 9px; border-left: 1px solid #d7ddd8; color: #6b776f; font-size: 11px; }
+.topbar nav a { display: inline-flex; align-items: center; gap: 6px; color: #385747; font-size: 12px; font-weight: 700; text-decoration: none; }
+.topbar nav a:hover { color: #17201b; }
+.status { justify-self: end; display: flex; align-items: center; gap: 7px; color: #68746d; font-size: 11px; }
+.status > span { width: 7px; height: 7px; border-radius: 50%; background: #3b825c; }
+.status > span.pulse { background: #b27925; box-shadow: 0 0 0 4px #f3e9d8; }
+.error-banner { padding: 9px 24px; border-bottom: 1px solid #ebc2bd; background: #fff0ee; color: #982e28; font-size: 12px; }
+main { max-width: 1520px; margin: 0 auto; padding: 24px 26px 60px; }
+.page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 17px; }
+.page-heading h1 { margin: 5px 0 4px; font-size: 28px; line-height: 1.1; letter-spacing: 0; }
+.page-heading p { margin: 0; color: #68746d; font-size: 11px; text-transform: uppercase; }
+.eyebrow { display: flex; align-items: center; gap: 6px; color: #456153; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.segmented { display: flex; align-items: center; gap: 3px; padding: 3px; border-radius: 5px; background: #e2e7e3; }
+.segmented button { min-width: 45px; padding: 6px 9px; border: 0; border-radius: 4px; background: transparent; color: #5f6b64; font-size: 11px; cursor: pointer; }
+.segmented button.is-active { background: #fff; color: #17201b; box-shadow: 0 1px 2px rgba(31, 48, 38, .13); }
+.metric-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: hidden; margin-bottom: 14px; border: 1px solid #d1dad3; border-radius: 6px; background: #fff; }
+.metric-strip > div { min-width: 0; padding: 13px 15px; border-right: 1px solid #dce2dd; }
+.metric-strip > div:last-child { border-right: 0; }
+.metric-strip span, .metric-strip small { display: block; overflow: hidden; color: #6c776f; font-size: 9px; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.metric-strip strong { display: block; margin: 5px 0 3px; font-size: clamp(18px, 1.7vw, 25px); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metric-strip strong.hot { color: #a84238; }
+.metric-strip strong.cool { color: #2f7653; }
+.chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.primary-grid { margin-bottom: 34px; }
+.chart-frame { min-width: 0; overflow: hidden; border: 1px solid #d1dad3; border-radius: 6px; background: #fff; }
+.chart-frame header { height: 47px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 14px; border-bottom: 1px solid #e0e5e1; }
+.chart-frame header h2 { margin: 0; font-size: 13px; letter-spacing: 0; }
+.chart-frame header span { display: block; margin-top: 3px; color: #6b776f; font-size: 9px; text-transform: uppercase; }
+.chart-frame header i { color: #55645b; font-size: 9px; font-style: normal; font-weight: 700; text-transform: uppercase; }
+.chart-canvas { height: 290px; padding: 7px 5px 3px; }
+.chart-primary .chart-canvas { height: 380px; }
+.chart-empty { height: 100%; display: grid; place-items: center; color: #6b776f; font-size: 11px; }
+.section-title { display: flex; align-items: center; gap: 12px; margin: 36px 0 12px; }
+.section-title > b { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid #aebbb2; border-radius: 50%; color: #496052; font-size: 10px; }
+.section-title h2 { margin: 0; font-size: 17px; letter-spacing: 0; }
+.section-title span { display: block; margin-top: 2px; color: #6b776f; font-size: 10px; text-transform: uppercase; }
+.loading { min-height: 420px; display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid #d1dad3; border-bottom: 1px solid #d1dad3; color: #5f6b64; font-size: 12px; }
+.warnings { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.warnings span { padding: 5px 7px; border: 1px solid #dfc9a2; border-radius: 4px; background: #fff8eb; color: #735128; font-size: 9px; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1000px) {
+  .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric-strip > div:nth-child(3n) { border-right: 0; }
+  .metric-strip > div:nth-child(-n+3) { border-bottom: 1px solid #dce2dd; }
+}
+
+@media (max-width: 720px) {
+  .topbar { grid-template-columns: 1fr auto; height: 58px; padding: 0 14px; }
+  .brand span, .status { display: none; }
+  main { padding: 18px 12px 40px; }
+  .page-heading { display: grid; align-items: start; }
+  .page-heading h1 { font-size: 23px; }
+  .segmented { width: fit-content; max-width: 100%; overflow-x: auto; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .chart-canvas, .chart-primary .chart-canvas { height: 285px; }
+  .primary-grid { margin-bottom: 28px; }
+  .section-title { align-items: flex-start; margin-top: 30px; }
+  .section-title span { line-height: 1.4; }
+}
+
+@media (max-width: 440px) {
+  .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-strip > div:nth-child(3n) { border-right: 1px solid #dce2dd; }
+  .metric-strip > div:nth-child(even) { border-right: 0; }
+  .metric-strip > div:nth-child(-n+4) { border-bottom: 1px solid #dce2dd; }
+  .metric-strip strong { font-size: 20px; }
+  .chart-canvas, .chart-primary .chart-canvas { height: 255px; }
+}

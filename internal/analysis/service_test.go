@@ -116,6 +116,21 @@ func TestServiceRefreshLifecycle(t *testing.T) {
 	t.Fatal("refresh did not complete")
 }
 
+func TestServiceAcceptsNumericInternationalTicker(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(state, fakeAnalyzer{})
+	if err := service.AddTicker("005930.ks"); err != nil {
+		t.Fatal(err)
+	}
+	if service.Snapshot().Tickers["005930.KS"] == nil {
+		t.Fatal("normalized international ticker was not persisted")
+	}
+}
+
 func TestServiceRefreshAllQueuesMacroOnce(t *testing.T) {
 	dir := t.TempDir()
 	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)

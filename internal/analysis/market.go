@@ -29,25 +29,68 @@ type Pipeline struct {
 	Market MarketProvider
 }
 
+type instrumentProfile struct {
+	company    string
+	kind       string
+	marketOnly bool
+}
+
+var instrumentProfiles = map[string]instrumentProfile{
+	"SPY":       {company: "SPDR S&P 500 ETF Trust", kind: "ETF", marketOnly: true},
+	"QQQ":       {company: "Invesco QQQ Trust", kind: "ETF", marketOnly: true},
+	"005930.KS": {company: "Samsung Electronics Co., Ltd.", kind: "International equity", marketOnly: true},
+	"BABA":      {company: "Alibaba Group Holding Limited", kind: "ADR", marketOnly: true},
+	"JD":        {company: "JD.com, Inc.", kind: "ADR", marketOnly: true},
+}
+
 func (p *Pipeline) Analyze(ctx context.Context, ticker string, existing *model.Equity) (*model.Equity, error) {
-	result, err := p.SEC.Analyze(ctx, ticker, existing)
-	if err != nil {
-		return nil, err
+	profile, profiled := instrumentProfiles[ticker]
+	if existing == nil {
+		existing = &model.Equity{Ticker: ticker, Annuals: []model.AnnualPoint{}, Prices: []model.PricePoint{}}
+	}
+	var result *model.Equity
+	var err error
+	if profiled && profile.marketOnly {
+		result = &model.Equity{
+			Ticker:         ticker,
+			Company:        profile.company,
+			InstrumentType: profile.kind,
+			Status:         "ready",
+			Annuals:        []model.AnnualPoint{},
+			Current:        existing.Current,
+			Prices:         existing.Prices,
+			Sources:        []string{},
+		}
+	} else {
+		if p.SEC == nil {
+			return nil, errors.New("SEC provider is not configured")
+		}
+		result, err = p.SEC.Analyze(ctx, ticker, existing)
+		if err != nil {
+			return nil, err
+		}
+		result.InstrumentType = "Equity"
 	}
 	normalizePerShareInputs(result)
 	if p.Market == nil {
+		if profile.marketOnly && len(result.Prices) == 0 {
+			return nil, ErrNoMarketProvider
+		}
 		result.Warnings = append(result.Warnings, ErrNoMarketProvider.Error())
 		enrichValuation(result)
 		enrichValuationHistory(result, result.Prices)
 		return result, nil
 	}
-	start := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Now().UTC()
 	prices, source, err := p.Market.History(ctx, ticker, start, end)
 	if err != nil {
 		longHistoryErr := err
 		prices, source, err = p.Market.History(ctx, ticker, end.AddDate(-9, 0, 0), end)
 		if err != nil {
+			if len(result.Annuals) == 0 && len(result.Prices) == 0 {
+				return nil, fmt.Errorf("market history unavailable: %w", err)
+			}
 			result.Warnings = append(result.Warnings, "market data: "+err.Error())
 			enrichValuation(result)
 			enrichValuationHistory(result, result.Prices)
