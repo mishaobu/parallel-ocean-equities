@@ -21,15 +21,33 @@ const fredStartDate = "1960-01-01"
 
 var fredSeriesIDs = []string{
 	"CPIAUCSL",
+	"CPILFESL",
+	"PCEPILFE",
+	"CUSR0000SAH1",
+	"CES0500000003",
 	"FEDFUNDS",
+	"GS3M",
 	"GS2",
+	"GS5",
 	"GS10",
+	"GS30",
+	"DFII5",
+	"DFII10",
+	"T5YIE",
+	"T5YIFR",
+	"THREEFFTP10",
 	"M1SL",
 	"M2SL",
 	"WALCL",
+	"WTREGEN",
+	"TOTBKCR",
+	"BUSLOANS",
 	"BAMLC0A0CM",
 	"USREC",
 	"UNRATE",
+	"ICSA",
+	"PAYEMS",
+	"SAHMREALTIME",
 	"GDPC1",
 	"INDPRO",
 	"T10YIE",
@@ -38,6 +56,10 @@ var fredSeriesIDs = []string{
 	"DTWEXBGS",
 	"VIXCLS",
 	"BAMLH0A0HYM2",
+	"DRTSCILM",
+	"DCOILWTICO",
+	"PCOPPUSDM",
+	"GFDEGDQ188S",
 	"BOGMBASE",
 	"TOTRESNS",
 	"RRPONTSYD",
@@ -127,6 +149,7 @@ func (f *FREDClient) Analyze(ctx context.Context) (model.MacroSeries, error) {
 		UpdatedAt: time.Now().UTC(),
 		Sources:   sources,
 		Warnings:  warnings,
+		Basis:     "Latest-revised FRED observations; historical values are not vintage snapshots.",
 		Points:    buildMacroPoints(series),
 	}, nil
 }
@@ -224,10 +247,22 @@ func buildMacroPoints(series map[string]map[string]float64) []model.MacroPoint {
 		point := model.MacroPoint{
 			Date:                month + "-01",
 			Inflation:           yearOverYear(series["CPIAUCSL"], month),
+			CoreInflation:       yearOverYear(series["CPILFESL"], month),
+			CorePCEInflation:    yearOverYear(series["PCEPILFE"], month),
+			ShelterInflation:    yearOverYear(series["CUSR0000SAH1"], month),
+			WageGrowth:          yearOverYear(series["CES0500000003"], month),
 			FedFunds:            valueAt(series["FEDFUNDS"], month),
+			Treasury3M:          valueAt(series["GS3M"], month),
 			Treasury2Y:          valueAt(series["GS2"], month),
+			Treasury5Y:          valueAt(series["GS5"], month),
 			Treasury10Y:         valueAt(series["GS10"], month),
+			Treasury30Y:         valueAt(series["GS30"], month),
+			Real5Y:              valueAt(series["DFII5"], month),
+			Real10Y:             valueAt(series["DFII10"], month),
+			Breakeven5Y:         valueAt(series["T5YIE"], month),
 			Breakeven10Y:        valueAt(series["T10YIE"], month),
+			ForwardInflation5Y:  valueAt(series["T5YIFR"], month),
+			TermPremium10Y:      valueAt(series["THREEFFTP10"], month),
 			Mortgage30Y:         valueAt(series["MORTGAGE30US"], month),
 			LogM1:               logValue(series["M1SL"], month, 1),
 			LogM2:               logValue(series["M2SL"], month, 1),
@@ -238,23 +273,69 @@ func buildMacroPoints(series map[string]map[string]float64) []model.MacroPoint {
 			M2Growth:            yearOverYear(series["M2SL"], month),
 			FedAssetsGrowth:     yearOverYear(series["WALCL"], month),
 			MonetaryBaseGrowth:  yearOverYear(series["BOGMBASE"], month),
+			TgaB:                scaledValue(series["WTREGEN"], month, 1000),
 			ReverseRepoB:        valueAt(series["RRPONTSYD"], month),
+			NetLiquidityB:       netLiquidityAt(series, month),
+			NetLiquidityGrowth:  netLiquidityGrowth(series, month),
+			BankCreditGrowth:    yearOverYear(series["TOTBKCR"], month),
+			BusinessLoanGrowth:  yearOverYear(series["BUSLOANS"], month),
 			RealGDPGrowth:       yearOverYear(series["GDPC1"], month),
 			IndustrialGrowth:    yearOverYear(series["INDPRO"], month),
+			PayrollGrowth:       yearOverYear(series["PAYEMS"], month),
+			InitialClaimsK:      scaledValue(series["ICSA"], month, 1000),
 			Unemployment:        valueAt(series["UNRATE"], month),
+			SahmRule:            valueAt(series["SAHMREALTIME"], month),
 			FinancialConditions: valueAt(series["NFCI"], month),
+			LendingStandards:    valueAt(series["DRTSCILM"], month),
 			DollarIndex:         valueAt(series["DTWEXBGS"], month),
 			VIX:                 valueAt(series["VIXCLS"], month),
 			CorporateSpread:     valueAt(series["BAMLC0A0CM"], month),
 			HighYieldSpread:     valueAt(series["BAMLH0A0HYM2"], month),
+			OilPrice:            valueAt(series["DCOILWTICO"], month),
+			CopperPrice:         valueAt(series["PCOPPUSDM"], month),
+			FederalDebtToGDP:    valueAt(series["GFDEGDQ188S"], month),
 			Recession:           valueAt(series["USREC"], month),
 		}
 		point.RealPolicyRate = difference(point.FedFunds, point.Inflation)
-		point.Real10Y = difference(point.Treasury10Y, point.Breakeven10Y)
+		if point.Real10Y == nil {
+			point.Real10Y = difference(point.Treasury10Y, point.Breakeven10Y)
+		}
 		point.YieldCurve = difference(point.Treasury10Y, point.Treasury2Y)
+		point.YieldCurve3M = difference(point.Treasury10Y, point.Treasury3M)
 		points = append(points, point)
 	}
 	return points
+}
+
+func scaledValue(values map[string]float64, month string, divisor float64) *float64 {
+	value, ok := values[month]
+	if !ok || divisor == 0 {
+		return nil
+	}
+	return floatPtr(value / divisor)
+}
+
+func netLiquidityAt(series map[string]map[string]float64, month string) *float64 {
+	fedAssets := scaledValue(series["WALCL"], month, 1000)
+	tga := scaledValue(series["WTREGEN"], month, 1000)
+	reverseRepo := valueAt(series["RRPONTSYD"], month)
+	if fedAssets == nil || tga == nil || reverseRepo == nil {
+		return nil
+	}
+	return floatPtr(*fedAssets - *tga - *reverseRepo)
+}
+
+func netLiquidityGrowth(series map[string]map[string]float64, month string) *float64 {
+	date, err := time.Parse("2006-01", month)
+	if err != nil {
+		return nil
+	}
+	current := netLiquidityAt(series, month)
+	prior := netLiquidityAt(series, date.AddDate(-1, 0, 0).Format("2006-01"))
+	if current == nil || prior == nil || *prior == 0 {
+		return nil
+	}
+	return floatPtr((*current / *prior - 1) * 100)
 }
 
 func valueAt(values map[string]float64, month string) *float64 {

@@ -42,7 +42,8 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	}
 	state := model.NewState()
 	state.UpdatedAt = time.Now()
-	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}}
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}, Valuations: []model.ValuationPoint{{Date: "2026-01-01", PE: floatPtr(20)}}}
+	state.Macro = model.MacroSeries{Points: []model.MacroPoint{{Date: "2026-01-01", Inflation: floatPtr(3), CoreInflation: floatPtr(2.5)}}}
 	service := &fakeService{state: state}
 	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir}).Handler()
 
@@ -66,6 +67,16 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || !bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
 		t.Fatalf("overview should omit quarterlies and retain compact prices: %d %s", resp.Code, resp.Body.String())
 	}
+	if bytes.Contains(resp.Body.Bytes(), []byte("coreInflation")) {
+		t.Fatalf("equities overview should use compact macro fields: %s", resp.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/monetary/api/state", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("coreInflation")) || !bytes.Contains(resp.Body.Bytes(), []byte("valuations")) || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
+		t.Fatalf("monetary state should include full macro and compact equities: %d %s", resp.Code, resp.Body.String())
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN", nil)
 	resp = httptest.NewRecorder()
@@ -82,6 +93,8 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 		t.Fatalf("add response: %d ticker=%s body=%s", resp.Code, service.added, resp.Body.String())
 	}
 }
+
+func floatPtr(value float64) *float64 { return &value }
 
 func TestCompactPricesRetainsQuarterEnds(t *testing.T) {
 	rows := compactPrices([]model.PricePoint{

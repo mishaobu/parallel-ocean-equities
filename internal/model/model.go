@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 5
+const StateVersion = 6
 
 type AnnualPoint struct {
 	FiscalYear     int      `json:"fiscalYear"`
@@ -111,13 +111,25 @@ type ValuationPoint struct {
 type MacroPoint struct {
 	Date                string   `json:"date"`
 	Inflation           *float64 `json:"inflation,omitempty"`
+	CoreInflation       *float64 `json:"coreInflation,omitempty"`
+	CorePCEInflation    *float64 `json:"corePceInflation,omitempty"`
+	ShelterInflation    *float64 `json:"shelterInflation,omitempty"`
+	WageGrowth          *float64 `json:"wageGrowth,omitempty"`
 	FedFunds            *float64 `json:"fedFunds,omitempty"`
+	Treasury3M          *float64 `json:"treasury3M,omitempty"`
 	Treasury2Y          *float64 `json:"treasury2Y,omitempty"`
+	Treasury5Y          *float64 `json:"treasury5Y,omitempty"`
 	Treasury10Y         *float64 `json:"treasury10Y,omitempty"`
+	Treasury30Y         *float64 `json:"treasury30Y,omitempty"`
 	RealPolicyRate      *float64 `json:"realPolicyRate,omitempty"`
+	Real5Y              *float64 `json:"real5Y,omitempty"`
 	Real10Y             *float64 `json:"real10Y,omitempty"`
 	YieldCurve          *float64 `json:"yieldCurve,omitempty"`
+	YieldCurve3M        *float64 `json:"yieldCurve3M,omitempty"`
+	Breakeven5Y         *float64 `json:"breakeven5Y,omitempty"`
 	Breakeven10Y        *float64 `json:"breakeven10Y,omitempty"`
+	ForwardInflation5Y  *float64 `json:"forwardInflation5Y,omitempty"`
+	TermPremium10Y      *float64 `json:"termPremium10Y,omitempty"`
 	Mortgage30Y         *float64 `json:"mortgage30Y,omitempty"`
 	LogM1               *float64 `json:"logM1,omitempty"`
 	LogM2               *float64 `json:"logM2,omitempty"`
@@ -128,15 +140,27 @@ type MacroPoint struct {
 	M2Growth            *float64 `json:"m2Growth,omitempty"`
 	FedAssetsGrowth     *float64 `json:"fedAssetsGrowth,omitempty"`
 	MonetaryBaseGrowth  *float64 `json:"monetaryBaseGrowth,omitempty"`
+	TgaB                *float64 `json:"tgaB,omitempty"`
 	ReverseRepoB        *float64 `json:"reverseRepoB,omitempty"`
+	NetLiquidityB       *float64 `json:"netLiquidityB,omitempty"`
+	NetLiquidityGrowth  *float64 `json:"netLiquidityGrowth,omitempty"`
+	BankCreditGrowth    *float64 `json:"bankCreditGrowth,omitempty"`
+	BusinessLoanGrowth  *float64 `json:"businessLoanGrowth,omitempty"`
 	RealGDPGrowth       *float64 `json:"realGdpGrowth,omitempty"`
 	IndustrialGrowth    *float64 `json:"industrialGrowth,omitempty"`
+	PayrollGrowth       *float64 `json:"payrollGrowth,omitempty"`
+	InitialClaimsK      *float64 `json:"initialClaimsK,omitempty"`
 	Unemployment        *float64 `json:"unemployment,omitempty"`
+	SahmRule            *float64 `json:"sahmRule,omitempty"`
 	FinancialConditions *float64 `json:"financialConditions,omitempty"`
+	LendingStandards    *float64 `json:"lendingStandards,omitempty"`
 	DollarIndex         *float64 `json:"dollarIndex,omitempty"`
 	VIX                 *float64 `json:"vix,omitempty"`
 	CorporateSpread     *float64 `json:"corporateSpread,omitempty"`
 	HighYieldSpread     *float64 `json:"highYieldSpread,omitempty"`
+	OilPrice            *float64 `json:"oilPrice,omitempty"`
+	CopperPrice         *float64 `json:"copperPrice,omitempty"`
+	FederalDebtToGDP    *float64 `json:"federalDebtToGdp,omitempty"`
 	Recession           *float64 `json:"recession,omitempty"`
 }
 
@@ -145,6 +169,7 @@ type MacroSeries struct {
 	Sources   []string     `json:"sources,omitempty"`
 	Warnings  []string     `json:"warnings,omitempty"`
 	Error     string       `json:"error,omitempty"`
+	Basis     string       `json:"basis,omitempty"`
 	Points    []MacroPoint `json:"points,omitempty"`
 }
 

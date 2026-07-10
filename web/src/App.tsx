@@ -123,7 +123,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><BarChart3 size={21} /><strong>Equities</strong><a href="/monetary/"><Landmark size={14} />Monetary</a><span>parallel-ocean</span></div>
+        <div className="brand"><BarChart3 size={21} /><strong>Equities</strong><a href={`/monetary/?ticker=${encodeURIComponent(selected)}`}><Landmark size={14} />Monetary</a><span>parallel-ocean</span></div>
         <form className="ticker-form" onSubmit={addTicker}>
           <label htmlFor="ticker-input">Add ticker</label>
           <input id="ticker-input" value={input} onChange={(event) => setInput(event.target.value.toUpperCase())} placeholder="NVDA" maxLength={10} autoComplete="off" />

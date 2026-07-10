@@ -88,6 +88,7 @@ func (s *Server) routes() {
 	})
 	if s.config.MonetaryStaticDir != "" && s.config.MonetaryPath != base {
 		monetary := s.config.MonetaryPath
+		s.mux.HandleFunc("GET "+monetary+"/api/state", s.handleMonetaryState)
 		s.mux.HandleFunc("GET "+monetary, func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, monetary+"/", http.StatusPermanentRedirect)
 		})
@@ -119,8 +120,33 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 		equity.Quarterlies = nil
 		equity.Prices = compactPrices(equity.Prices)
 	}
+	state.Macro = compactMacro(state.Macro)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state":   state,
+		"runtime": s.service.Stats(),
+	})
+}
+
+func (s *Server) handleMonetaryState(w http.ResponseWriter, _ *http.Request) {
+	type monetaryEquity struct {
+		Ticker     string                 `json:"ticker"`
+		Company    string                 `json:"company,omitempty"`
+		Prices     []model.PricePoint     `json:"prices,omitempty"`
+		Valuations []model.ValuationPoint `json:"valuations,omitempty"`
+	}
+	state := s.service.Snapshot()
+	equities := make(map[string]monetaryEquity, len(state.Tickers))
+	for ticker, equity := range state.Tickers {
+		equities[ticker] = monetaryEquity{Ticker: equity.Ticker, Company: equity.Company, Prices: compactPrices(equity.Prices), Valuations: equity.Valuations}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"state": map[string]any{
+			"version":   state.Version,
+			"updatedAt": state.UpdatedAt,
+			"tickers":   equities,
+			"macro":     state.Macro,
+		},
 		"runtime": s.service.Stats(),
 	})
 }
@@ -147,6 +173,29 @@ func compactPrices(rows []model.PricePoint) []model.PricePoint {
 		out = append(out, byQuarter[key])
 	}
 	return out
+}
+
+func compactMacro(series model.MacroSeries) model.MacroSeries {
+	points := make([]model.MacroPoint, 0, len(series.Points))
+	for _, row := range series.Points {
+		points = append(points, model.MacroPoint{
+			Date:            row.Date,
+			Inflation:       row.Inflation,
+			FedFunds:        row.FedFunds,
+			Treasury2Y:      row.Treasury2Y,
+			Treasury10Y:     row.Treasury10Y,
+			RealPolicyRate:  row.RealPolicyRate,
+			YieldCurve:      row.YieldCurve,
+			LogM1:           row.LogM1,
+			LogM2:           row.LogM2,
+			LogFedAssets:    row.LogFedAssets,
+			M1Growth:        row.M1Growth,
+			M2Growth:        row.M2Growth,
+			CorporateSpread: row.CorporateSpread,
+		})
+	}
+	series.Points = points
+	return series
 }
 
 func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {

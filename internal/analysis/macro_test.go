@@ -19,18 +19,26 @@ func TestFREDClientBuildsDerivedMacroSeries(t *testing.T) {
 		switch id {
 		case "CPIAUCSL":
 			fmt.Fprintln(w, "2024-01-01,100\n2025-01-01,103")
+		case "CPILFESL":
+			fmt.Fprintln(w, "2024-01-01,100\n2025-01-01,102.5")
 		case "M1SL":
 			fmt.Fprintln(w, "2024-01-01,1000\n2025-01-01,1100")
 		case "M2SL":
 			fmt.Fprintln(w, "2024-01-01,2000\n2025-01-01,2200")
 		case "WALCL":
-			fmt.Fprintln(w, "2025-01-01,7000000\n2025-01-29,8000000")
+			fmt.Fprintln(w, "2024-01-31,7000000\n2025-01-01,7000000\n2025-01-29,8000000")
+		case "WTREGEN":
+			fmt.Fprintln(w, "2024-01-31,500000\n2025-01-31,600000")
+		case "RRPONTSYD":
+			fmt.Fprintln(w, "2024-01-31,500\n2025-01-31,300")
 		case "FEDFUNDS":
 			fmt.Fprintln(w, "2025-01-01,4.5")
 		case "GS2":
 			fmt.Fprintln(w, "2025-01-01,4.0")
 		case "GS10":
 			fmt.Fprintln(w, "2025-01-01,4.4")
+		case "DFII10":
+			fmt.Fprintln(w, "2025-01-01,1.8")
 		case "BAMLC0A0CM":
 			fmt.Fprintln(w, "2025-01-01,1.1")
 		default:
@@ -50,12 +58,15 @@ func TestFREDClientBuildsDerivedMacroSeries(t *testing.T) {
 	}
 	latest := series.Points[len(series.Points)-1]
 	assertClose(t, "inflation", latest.Inflation, 3)
+	assertClose(t, "core inflation", latest.CoreInflation, 2.5)
 	assertClose(t, "real policy rate", latest.RealPolicyRate, 1.5)
 	assertClose(t, "yield curve", latest.YieldCurve, 0.4)
-	assertClose(t, "real 10Y", latest.Real10Y, 3.4)
+	assertClose(t, "real 10Y", latest.Real10Y, 1.8)
 	assertClose(t, "M1 growth", latest.M1Growth, 10)
 	assertClose(t, "M2 growth", latest.M2Growth, 10)
 	assertClose(t, "Fed assets log", latest.LogFedAssets, math.Log10(8000))
+	assertClose(t, "net liquidity", latest.NetLiquidityB, 7100)
+	assertClose(t, "net liquidity growth", latest.NetLiquidityGrowth, 100.0/6.0+100.0/6.0/10.0)
 }
 
 func TestFREDClientKeepsOptionalSeriesFailureAsWarning(t *testing.T) {

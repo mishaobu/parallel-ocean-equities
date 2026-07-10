@@ -29,7 +29,11 @@ Historical `N12M realized` points use the next four subsequently reported quarte
 
 ## Monetary context
 
-Monthly macro history comes from 21 FRED series covering inflation, policy rates, Treasury and mortgage rates, inflation expectations, money and reserve aggregates, Federal Reserve assets, reverse repos, real growth, industrial production, unemployment, financial conditions, the broad dollar, volatility, credit spreads, and NBER recessions. Required core series fail the refresh if unavailable; optional series record warnings without discarding the rest of the macro archive.
+The macro archive comes from 43 FRED series covering headline, core, PCE, shelter and wage inflation; the nominal Treasury curve; direct TIPS yields; breakevens and forward inflation; term premium; money, reserves and bank credit; Federal Reserve assets; the Treasury General Account; reverse repos; output, payrolls, claims and unemployment; lending standards; financial conditions; the dollar, volatility and credit spreads; commodities; federal debt; and NBER recessions. Required core series fail the refresh if unavailable; optional series record warnings without discarding the rest of the archive.
+
+Net liquidity is defined as Federal Reserve assets minus the Treasury General Account minus overnight reverse repos, after normalizing all three inputs to USD billions. The dashboard presents both the stock and its year-over-year impulse. Composite regime pillars standardize multiple constituent series over the selected history instead of averaging unmatched raw levels.
+
+FRED history is latest-revised data, not a point-in-time ALFRED vintage archive. Equity regime outcome tables apply a conservative two-month observation lag to reduce release-date look-ahead, but they remain descriptive historical comparisons rather than investable backtests. Every current dashboard reading displays its observation month and lag from the latest populated macro row.
 
 ## Valuation models
 

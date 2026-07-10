@@ -8,7 +8,7 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`, w
 - Yahoo Finance monthly closes provide split-adjusted long-history coverage.
 - ThetaData v3 EOD is retained as a market-data fallback when `THETA_BASE_URL` is configured.
 - Polygon resolves ticker CIKs when the SEC ticker map is unavailable and supplies adjusted daily bars when configured.
-- FRED supplies monthly monetary history: CPI, policy and Treasury rates, M1, M2, Federal Reserve assets, and corporate option-adjusted spread.
+- FRED supplies the macro archive: inflation components, nominal and real rates, term premium, money and bank credit, Federal Reserve assets, Treasury cash, reverse repos, labor, lending standards, credit spreads, commodities, fiscal context, and recession flags.
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
 
@@ -22,7 +22,7 @@ make run
 
 Open `http://localhost:8080/equities/`.
 
-The monetary workspace is available at `http://localhost:8080/monetary/`. It uses the same persisted FRED series through the equities state API while keeping its own frontend bundle and route.
+The monetary workspace is available at `http://localhost:8080/monetary/`. It uses the same persisted FRED and equity state through the equities API while keeping its own frontend bundle and route. Its views provide dated regime pillars, synchronized/pinnable chart inspection, historical episode comparison, native/change/z-score/percentile transforms, net-liquidity accounting, and release-lagged equity-regime outcomes. Historical FRED observations are latest-revised values rather than ALFRED vintages; the UI states this explicitly.
 
 ## Configuration
 
