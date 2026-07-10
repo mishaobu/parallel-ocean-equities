@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,12 +35,17 @@ var (
 )
 
 type SECClient struct {
-	baseURL   string
-	userAgent string
-	http      *http.Client
+	baseURL        string
+	polygonBaseURL string
+	polygonAPIKey  string
+	userAgent      string
+	http           *http.Client
 
-	mu      sync.RWMutex
-	tickers map[string]companyTicker
+	loadMu          sync.Mutex
+	mu              sync.RWMutex
+	tickers         map[string]companyTicker
+	tickerMapLoaded bool
+	tickerMapErr    error
 }
 
 type companyTicker struct {
@@ -67,11 +74,17 @@ type fact struct {
 	Frame string  `json:"frame"`
 }
 
-func NewSECClient(userAgent string, client *http.Client) *SECClient {
+func NewSECClient(userAgent, polygonAPIKey string, client *http.Client) *SECClient {
 	if client == nil {
 		client = &http.Client{Timeout: 45 * time.Second}
 	}
-	return &SECClient{baseURL: defaultSECBase, userAgent: userAgent, http: client}
+	return &SECClient{
+		baseURL:        defaultSECBase,
+		polygonBaseURL: "https://api.polygon.io",
+		polygonAPIKey:  polygonAPIKey,
+		userAgent:      userAgent,
+		http:           client,
+	}
 }
 
 func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.Equity) (*model.Equity, error) {
@@ -115,29 +128,94 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 
 func (c *SECClient) lookup(ctx context.Context, ticker string) (companyTicker, error) {
 	ticker = strings.ToUpper(ticker)
-	c.mu.RLock()
-	company, ok := c.tickers[ticker]
-	c.mu.RUnlock()
-	if ok {
+	if company, ok := c.cachedTicker(ticker); ok {
 		return company, nil
+	}
+	c.ensureTickerMap(ctx)
+	if company, ok := c.cachedTicker(ticker); ok {
+		return company, nil
+	}
+	company, polygonErr := c.lookupPolygon(ctx, ticker)
+	if polygonErr == nil {
+		c.mu.Lock()
+		c.tickers[ticker] = company
+		c.mu.Unlock()
+		return company, nil
+	}
+	c.mu.RLock()
+	mapErr := c.tickerMapErr
+	c.mu.RUnlock()
+	if mapErr != nil {
+		return companyTicker{}, fmt.Errorf("SEC ticker map: %v; Polygon ticker details: %w", mapErr, polygonErr)
+	}
+	return companyTicker{}, fmt.Errorf("ticker %s is not in the SEC company map: %w", ticker, polygonErr)
+}
+
+func (c *SECClient) cachedTicker(ticker string) (companyTicker, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	company, ok := c.tickers[ticker]
+	return company, ok
+}
+
+func (c *SECClient) ensureTickerMap(ctx context.Context) {
+	c.loadMu.Lock()
+	defer c.loadMu.Unlock()
+	c.mu.RLock()
+	loaded := c.tickerMapLoaded
+	c.mu.RUnlock()
+	if loaded {
+		return
 	}
 
 	var rows map[string]companyTicker
-	if err := c.getJSONFrom(ctx, "https://www.sec.gov/files/company_tickers.json", &rows); err != nil {
-		return companyTicker{}, fmt.Errorf("SEC ticker map: %w", err)
-	}
+	err := c.getJSONFrom(ctx, "https://www.sec.gov/files/company_tickers.json", &rows)
 	index := make(map[string]companyTicker, len(rows))
-	for _, row := range rows {
-		index[strings.ToUpper(row.Ticker)] = row
+	if err == nil {
+		for _, row := range rows {
+			index[strings.ToUpper(row.Ticker)] = row
+		}
 	}
 	c.mu.Lock()
 	c.tickers = index
+	c.tickerMapLoaded = true
+	c.tickerMapErr = err
 	c.mu.Unlock()
-	company, ok = index[ticker]
-	if !ok {
-		return companyTicker{}, fmt.Errorf("ticker %s is not in the SEC company map", ticker)
+}
+
+func (c *SECClient) lookupPolygon(ctx context.Context, ticker string) (companyTicker, error) {
+	if c.polygonAPIKey == "" {
+		return companyTicker{}, errors.New("Polygon API key is not configured")
 	}
-	return company, nil
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.polygonBaseURL+"/v3/reference/tickers/"+url.PathEscape(ticker), nil)
+	if err != nil {
+		return companyTicker{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.polygonAPIKey)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return companyTicker{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return companyTicker{}, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		Results struct {
+			Ticker string `json:"ticker"`
+			Name   string `json:"name"`
+			CIK    string `json:"cik"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&payload); err != nil {
+		return companyTicker{}, err
+	}
+	cik, err := strconv.Atoi(strings.TrimLeft(payload.Results.CIK, "0"))
+	if err != nil || cik == 0 {
+		return companyTicker{}, errors.New("response has no valid CIK")
+	}
+	return companyTicker{CIK: cik, Ticker: strings.ToUpper(payload.Results.Ticker), Title: payload.Results.Name}, nil
 }
 
 func (c *SECClient) getJSON(ctx context.Context, path string, target any) error {

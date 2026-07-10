@@ -3,6 +3,9 @@ package analysis
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,4 +102,33 @@ func TestExtractAnnualsSupportsProductiveAssetCapex(t *testing.T) {
 	if len(rows) != 1 || rows[0].CapexB == nil || *rows[0].CapexB != 7 {
 		t.Fatalf("productive-asset capex not extracted: %#v", rows)
 	}
+}
+
+func TestPolygonTickerLookup(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Fatalf("missing bearer authorization: %q", r.Header.Get("Authorization"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"results":{"ticker":"NVDA","name":"Nvidia Corp","cik":"0001045810"}}`)),
+		}, nil
+	})}
+
+	client := NewSECClient("test", "test-key", httpClient)
+	client.polygonBaseURL = "https://polygon.test"
+	company, err := client.lookupPolygon(context.Background(), "NVDA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if company.CIK != 1045810 || company.Ticker != "NVDA" || company.Title != "Nvidia Corp" {
+		t.Fatalf("unexpected company: %#v", company)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }

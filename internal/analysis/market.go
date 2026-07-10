@@ -182,11 +182,12 @@ func NewPolygonMarket(apiKey string, client *http.Client) *PolygonMarket {
 
 func (p *PolygonMarket) History(ctx context.Context, ticker string, start, end time.Time) ([]model.PricePoint, string, error) {
 	endpoint := fmt.Sprintf("%s/v2/aggs/ticker/%s/range/1/day/%s/%s", p.baseURL, url.PathEscape(ticker), start.Format("2006-01-02"), end.Format("2006-01-02"))
-	query := url.Values{"adjusted": {"true"}, "sort": {"asc"}, "limit": {"50000"}, "apiKey": {p.apiKey}}
+	query := url.Values{"adjusted": {"true"}, "sort": {"asc"}, "limit": {"50000"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 	if err != nil {
 		return nil, "", err
 	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	resp, err := p.http.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("Polygon: %w", err)

@@ -6,7 +6,7 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`. T
 
 - SEC Company Facts supplies annual revenue, capex, net income, and diluted EPS.
 - ThetaData v3 EOD is the preferred price-history source when `THETA_BASE_URL` is configured.
-- Polygon adjusted daily aggregates are the fallback when `POLYGON_API_KEY` is configured.
+- Polygon resolves ticker CIKs when the SEC ticker map is unavailable and supplies adjusted daily bars when configured.
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
 

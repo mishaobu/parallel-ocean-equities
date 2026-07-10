@@ -25,10 +25,11 @@ func main() {
 		os.Exit(1)
 	}
 	httpClient := &http.Client{Timeout: 2 * time.Minute}
-	sec := analysis.NewSECClient(env("SEC_USER_AGENT", "parallel-ocean-equities parallel-ocean.xyz/equities"), httpClient)
+	polygonAPIKey := os.Getenv("POLYGON_API_KEY")
+	sec := analysis.NewSECClient(env("SEC_USER_AGENT", "parallel-ocean-equities parallel-ocean.xyz/equities"), polygonAPIKey, httpClient)
 	market := analysis.NewCompositeMarket(
 		analysis.NewThetaMarket(os.Getenv("THETA_BASE_URL"), httpClient),
-		analysis.NewPolygonMarket(os.Getenv("POLYGON_API_KEY"), httpClient),
+		analysis.NewPolygonMarket(polygonAPIKey, httpClient),
 	)
 	pipeline := &analysis.Pipeline{SEC: sec, Market: market}
 	service := analysis.NewService(state, pipeline)
