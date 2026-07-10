@@ -106,7 +106,7 @@ function CompareView({ equities, metric }: { equities: Equity[]; metric: MetricK
       <div className="view-title"><div><h1>Cross-company trajectories</h1><span>{equities.length} tickers / actuals and estimates</span></div></div>
       <MetricChart equities={equities} metric={metric} />
       <div className="small-multiples">
-        {(["capexB", "netIncomeB", "dilutedEps", "peRatio"] as MetricKey[]).map((key) => <MetricChart key={key} equities={equities} metric={key} compact />)}
+        {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={equities} metric={key} compact />)}
       </div>
       <div className="table-wrap comparison-table">
         <table><thead><tr><th>Ticker</th><th>Price</th><th>1Y</th><th>Latest capex</th><th>2026E capex</th><th>Latest net income</th><th>Trailing P/E</th><th>Forward P/E</th><th>Updated</th></tr></thead>
