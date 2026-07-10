@@ -1,0 +1,442 @@
+{
+  "version": 1,
+  "updatedAt": "2026-06-26T00:00:00Z",
+  "tickers": {
+    "AMZN": {
+      "ticker": "AMZN",
+      "company": "Amazon.com, Inc.",
+      "status": "ready",
+      "updatedAt": "2026-06-26T00:00:00Z",
+      "sources": [
+        "SEC filings",
+        "point-in-time market snapshot"
+      ],
+      "annuals": [
+        {
+          "fiscalYear": 2018,
+          "periodEnd": "2018-12-31",
+          "capexB": 13.43,
+          "netIncomeB": 10.07,
+          "dilutedEps": 1.01,
+          "peRatio": 73,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2019,
+          "periodEnd": "2019-12-31",
+          "capexB": 16.86,
+          "netIncomeB": 11.59,
+          "dilutedEps": 1.15,
+          "peRatio": 80,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2020,
+          "periodEnd": "2020-12-31",
+          "capexB": 40.14,
+          "netIncomeB": 21.33,
+          "dilutedEps": 2.09,
+          "peRatio": 93,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2021,
+          "periodEnd": "2021-12-31",
+          "capexB": 61.05,
+          "netIncomeB": 33.36,
+          "dilutedEps": 3.24,
+          "peRatio": 66,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2022,
+          "periodEnd": "2022-12-31",
+          "capexB": 63.65,
+          "netIncomeB": -2.72,
+          "dilutedEps": -0.27,
+          "peRatio": null,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2023,
+          "periodEnd": "2023-12-31",
+          "capexB": 52.73,
+          "netIncomeB": 30.43,
+          "dilutedEps": 2.9,
+          "peRatio": 76,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2024,
+          "periodEnd": "2024-12-31",
+          "capexB": 83,
+          "netIncomeB": 59.25,
+          "dilutedEps": 5.53,
+          "peRatio": 48,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2025,
+          "periodEnd": "2025-12-31",
+          "capexB": 131.82,
+          "netIncomeB": 77.67,
+          "dilutedEps": 7.17,
+          "peRatio": 35,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2026,
+          "periodEnd": "2026-12-31",
+          "capexB": 200,
+          "netIncomeB": 94.94,
+          "dilutedEps": 8.69,
+          "peRatio": 28,
+          "estimate": true,
+          "confidence": "medium"
+        }
+      ],
+      "current": {
+        "price": 230.28,
+        "ttmEps": 8.36,
+        "trailingPE": 27.15,
+        "forwardEps": 8.69,
+        "forwardPE": 26.5
+      }
+    },
+    "MSFT": {
+      "ticker": "MSFT",
+      "company": "Microsoft Corporation",
+      "status": "ready",
+      "updatedAt": "2026-06-26T00:00:00Z",
+      "sources": [
+        "SEC filings",
+        "point-in-time market snapshot"
+      ],
+      "annuals": [
+        {
+          "fiscalYear": 2018,
+          "periodEnd": "2018-06-30",
+          "capexB": 11.632,
+          "netIncomeB": 16.571,
+          "dilutedEps": 2.13,
+          "peRatio": 45.6,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2019,
+          "periodEnd": "2019-06-30",
+          "capexB": 13.925,
+          "netIncomeB": 39.24,
+          "dilutedEps": 5.06,
+          "peRatio": 26.5,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2020,
+          "periodEnd": "2020-06-30",
+          "capexB": 15.441,
+          "netIncomeB": 44.281,
+          "dilutedEps": 5.76,
+          "peRatio": 35,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2021,
+          "periodEnd": "2021-06-30",
+          "capexB": 20.622,
+          "netIncomeB": 61.271,
+          "dilutedEps": 8.05,
+          "peRatio": 34.5,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2022,
+          "periodEnd": "2022-06-30",
+          "capexB": 23.886,
+          "netIncomeB": 72.738,
+          "dilutedEps": 9.65,
+          "peRatio": 26.4,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2023,
+          "periodEnd": "2023-06-30",
+          "capexB": 28.107,
+          "netIncomeB": 72.361,
+          "dilutedEps": 9.68,
+          "peRatio": 34.6,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2024,
+          "periodEnd": "2024-06-30",
+          "capexB": 44.477,
+          "netIncomeB": 88.136,
+          "dilutedEps": 11.8,
+          "peRatio": 38,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2025,
+          "periodEnd": "2025-06-30",
+          "capexB": 64.551,
+          "netIncomeB": 101.832,
+          "dilutedEps": 13.64,
+          "peRatio": 36,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2026,
+          "periodEnd": "2026-06-30",
+          "capexB": 190,
+          "netIncomeB": 129.24,
+          "dilutedEps": 16.84,
+          "peRatio": 21,
+          "estimate": true,
+          "confidence": "medium"
+        }
+      ],
+      "current": {
+        "price": 369.55,
+        "ttmEps": 16.79,
+        "trailingPE": 21.01,
+        "forwardEps": 19.37,
+        "forwardPE": 19.06
+      }
+    },
+    "GOOGL": {
+      "ticker": "GOOGL",
+      "company": "Alphabet Inc.",
+      "status": "ready",
+      "updatedAt": "2026-06-26T00:00:00Z",
+      "sources": [
+        "SEC filings",
+        "point-in-time market snapshot"
+      ],
+      "annuals": [
+        {
+          "fiscalYear": 2018,
+          "periodEnd": "2018-12-31",
+          "capexB": 25.139,
+          "netIncomeB": 30.736,
+          "dilutedEps": 2.19,
+          "peRatio": 24.9,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2019,
+          "periodEnd": "2019-12-31",
+          "capexB": 23.548,
+          "netIncomeB": 34.343,
+          "dilutedEps": 2.46,
+          "peRatio": 27.7,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2020,
+          "periodEnd": "2020-12-31",
+          "capexB": 22.281,
+          "netIncomeB": 40.269,
+          "dilutedEps": 2.93,
+          "peRatio": 30.9,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2021,
+          "periodEnd": "2021-12-31",
+          "capexB": 24.64,
+          "netIncomeB": 76.033,
+          "dilutedEps": 5.61,
+          "peRatio": 27.2,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2022,
+          "periodEnd": "2022-12-31",
+          "capexB": 31.485,
+          "netIncomeB": 59.972,
+          "dilutedEps": 4.56,
+          "peRatio": 17.1,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2023,
+          "periodEnd": "2023-12-31",
+          "capexB": 32.251,
+          "netIncomeB": 73.795,
+          "dilutedEps": 5.8,
+          "peRatio": 26.3,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2024,
+          "periodEnd": "2024-12-31",
+          "capexB": 52.535,
+          "netIncomeB": 100.118,
+          "dilutedEps": 8.04,
+          "peRatio": 24.6,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2025,
+          "periodEnd": "2025-12-31",
+          "capexB": 91.447,
+          "netIncomeB": 132.17,
+          "dilutedEps": 10.81,
+          "peRatio": 30.4,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2026,
+          "periodEnd": "2026-12-31",
+          "capexB": 185,
+          "netIncomeB": 172,
+          "dilutedEps": 14.22,
+          "peRatio": 26.2,
+          "estimate": true,
+          "confidence": "medium"
+        }
+      ],
+      "current": {
+        "price": 341.26,
+        "ttmEps": 13.11,
+        "trailingPE": 26.22,
+        "forwardEps": 14.22,
+        "forwardPE": 24.03
+      }
+    },
+    "META": {
+      "ticker": "META",
+      "company": "Meta Platforms, Inc.",
+      "status": "ready",
+      "updatedAt": "2026-06-26T00:00:00Z",
+      "sources": [
+        "SEC filings",
+        "point-in-time market snapshot"
+      ],
+      "annuals": [
+        {
+          "fiscalYear": 2018,
+          "periodEnd": "2018-12-31",
+          "capexB": 13.915,
+          "netIncomeB": 22.112,
+          "dilutedEps": 7.57,
+          "peRatio": 17,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2019,
+          "periodEnd": "2019-12-31",
+          "capexB": 15.102,
+          "netIncomeB": 18.485,
+          "dilutedEps": 6.43,
+          "peRatio": 31.5,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2020,
+          "periodEnd": "2020-12-31",
+          "capexB": 15.115,
+          "netIncomeB": 29.146,
+          "dilutedEps": 10.09,
+          "peRatio": 26.6,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2021,
+          "periodEnd": "2021-12-31",
+          "capexB": 18.69,
+          "netIncomeB": 39.37,
+          "dilutedEps": 13.77,
+          "peRatio": 23.9,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2022,
+          "periodEnd": "2022-12-31",
+          "capexB": 31.186,
+          "netIncomeB": 23.2,
+          "dilutedEps": 8.59,
+          "peRatio": 13.9,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2023,
+          "periodEnd": "2023-12-31",
+          "capexB": 27.045,
+          "netIncomeB": 39.098,
+          "dilutedEps": 14.87,
+          "peRatio": 23.2,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2024,
+          "periodEnd": "2024-12-31",
+          "capexB": 37.256,
+          "netIncomeB": 62.36,
+          "dilutedEps": 23.86,
+          "peRatio": 23.8,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2025,
+          "periodEnd": "2025-12-31",
+          "capexB": 69.691,
+          "netIncomeB": 60.458,
+          "dilutedEps": 23.49,
+          "peRatio": 27.5,
+          "estimate": false,
+          "confidence": "high"
+        },
+        {
+          "fiscalYear": 2026,
+          "periodEnd": "2026-12-31",
+          "capexB": 135,
+          "netIncomeB": 81,
+          "dilutedEps": 32,
+          "peRatio": 20.3,
+          "estimate": true,
+          "confidence": "low"
+        }
+      ],
+      "current": {
+        "price": 557.67,
+        "ttmEps": 27.52,
+        "trailingPE": 20.3,
+        "forwardEps": 31.45,
+        "forwardPE": 17.73
+      }
+    }
+  }
+}
