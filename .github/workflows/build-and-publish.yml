@@ -20,12 +20,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: true
-      - uses: actions/setup-node@v4
+          cache: false
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
@@ -47,14 +47,14 @@ jobs:
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: meta
         shell: bash
         run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to Azure
         if: github.event_name == 'push'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -62,7 +62,7 @@ jobs:
       - name: Log in to ACR
         if: github.event_name == 'push'
         run: az acr login --name stagingeastusacr77
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
@@ -81,7 +81,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
