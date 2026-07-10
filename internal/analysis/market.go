@@ -35,6 +35,7 @@ func (p *Pipeline) Analyze(ctx context.Context, ticker string, existing *model.E
 	}
 	if p.Market == nil {
 		result.Warnings = append(result.Warnings, ErrNoMarketProvider.Error())
+		enrichValuation(result)
 		return result, nil
 	}
 	start := time.Now().UTC().AddDate(-9, 0, 0)
@@ -42,9 +43,11 @@ func (p *Pipeline) Analyze(ctx context.Context, ticker string, existing *model.E
 	prices, source, err := p.Market.History(ctx, ticker, start, end)
 	if err != nil {
 		result.Warnings = append(result.Warnings, "market data: "+err.Error())
+		enrichValuation(result)
 		return result, nil
 	}
 	enrichMarket(result, prices)
+	enrichValuation(result)
 	result.Sources = append(result.Sources, source)
 	return result, nil
 }

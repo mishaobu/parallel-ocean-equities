@@ -19,7 +19,12 @@ type fakeService struct {
 	added string
 }
 
-func (f *fakeService) Snapshot() model.State         { return f.state }
+func (f *fakeService) Snapshot() model.State {
+	data, _ := json.Marshal(f.state)
+	var state model.State
+	_ = json.Unmarshal(data, &state)
+	return state
+}
 func (f *fakeService) Stats() analysis.Stats         { return analysis.Stats{} }
 func (f *fakeService) DeleteTicker(string) error     { return nil }
 func (f *fakeService) Queue(string) bool             { return true }
@@ -33,7 +38,7 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	}
 	state := model.NewState()
 	state.UpdatedAt = time.Now()
-	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready"}
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}}
 	service := &fakeService{state: state}
 	handler := New(service, Config{BasePath: "/equities", StaticDir: dir}).Handler()
 
@@ -42,6 +47,20 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("equities")) {
 		t.Fatalf("static response: %d %s", resp.Code, resp.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/equities/api/state", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
+		t.Fatalf("overview should omit quarterly history: %d %s", resp.Code, resp.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
+		t.Fatalf("ticker detail should include quarterly history: %d %s", resp.Code, resp.Body.String())
 	}
 
 	body, _ := json.Marshal(map[string]string{"ticker": "NVDA"})

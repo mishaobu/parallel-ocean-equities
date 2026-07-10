@@ -1,23 +1,31 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, GitCompareArrows, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
+import { BarChart3, Calculator, GitCompareArrows, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
 import { api } from "./api";
-import { delta, formatMetric, latestActual, latestEstimate, metricLabels } from "./chartData";
+import { metricLabels } from "./chartData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MetricChart } from "./components/MetricChart";
 import { PriceChart } from "./components/PriceChart";
+import { BalanceSheetChart, QuarterlyChart } from "./components/QuarterlyCharts";
+import { QuarterlyTable } from "./components/QuarterlyTable";
 import { TickerRail } from "./components/TickerRail";
+import { ValuationMatrix } from "./components/ValuationMatrix";
+import { ValuationWorkbench } from "./components/ValuationWorkbench";
 import type { Equity, MetricKey, StateResponse } from "./types";
+import { formatValuation, valuationRows } from "./valuationData";
 
 const metrics: MetricKey[] = ["revenueB", "capexB", "netIncomeB", "dilutedEps", "peRatio"];
+type ViewMode = "compare" | "ticker" | "models";
 
 function App() {
   const [payload, setPayload] = useState<StateResponse | null>(null);
+  const [details, setDetails] = useState<Record<string, Equity>>({});
   const [error, setError] = useState("");
   const [selected, setSelected] = useState("AMZN");
-  const [mode, setMode] = useState<"compare" | "ticker">("compare");
+  const [mode, setMode] = useState<ViewMode>("compare");
   const [metric, setMetric] = useState<MetricKey>("capexB");
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -30,14 +38,35 @@ function App() {
     }
   }, [selected]);
 
+  const loadDetail = useCallback(async (ticker: string) => {
+    if (!ticker) return;
+    setLoadingDetail(ticker);
+    try {
+      const detail = await api.equity(ticker);
+      setDetails((current) => ({ ...current, [ticker]: detail }));
+      setError("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : `Unable to load ${ticker}`);
+    } finally {
+      setLoadingDetail((current) => current === ticker ? "" : current);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 12_000);
+    const timer = window.setInterval(() => void load(), 30_000);
     return () => window.clearInterval(timer);
   }, [load]);
 
   const equities = useMemo(() => Object.values(payload?.state.tickers ?? {}).sort((a, b) => a.ticker.localeCompare(b.ticker)), [payload]);
-  const selectedEquity = payload?.state.tickers[selected] ?? equities[0];
+  const overviewEquity = payload?.state.tickers[selected] ?? equities[0];
+  const selectedEquity = details[selected] ?? overviewEquity;
+
+  useEffect(() => {
+    if (mode === "compare" || !selected || loadingDetail === selected) return;
+    const detail = details[selected];
+    if (!detail || detail.updatedAt !== overviewEquity?.updatedAt) void loadDetail(selected);
+  }, [details, loadDetail, loadingDetail, mode, overviewEquity?.updatedAt, selected]);
 
   async function addTicker(event: FormEvent) {
     event.preventDefault();
@@ -59,11 +88,21 @@ function App() {
 
   async function refreshTicker(ticker: string) {
     await api.refreshTicker(ticker);
+    setDetails((current) => {
+      const next = { ...current };
+      delete next[ticker];
+      return next;
+    });
     await load();
   }
 
   async function removeTicker(ticker: string) {
     await api.removeTicker(ticker);
+    setDetails((current) => {
+      const next = { ...current };
+      delete next[ticker];
+      return next;
+    });
     setMode("compare");
     await load();
   }
@@ -88,12 +127,15 @@ function App() {
           <div className="view-toolbar">
             <div className="segmented" aria-label="View">
               <button type="button" className={mode === "compare" ? "is-active" : ""} onClick={() => setMode("compare")}><GitCompareArrows size={15} />Compare</button>
-              <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Ticker</button>
+              <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Financials</button>
+              <button type="button" className={mode === "models" ? "is-active" : ""} onClick={() => setMode("models")} disabled={!selectedEquity}><Calculator size={15} />Models</button>
             </div>
             {mode === "compare" && <div className="metric-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => setMetric(key)}>{metricLabels[key]}</button>)}</div>}
           </div>
 
-          {mode === "compare" ? <CompareView equities={equities} metric={metric} /> : selectedEquity && <TickerView equity={selectedEquity} onRefresh={refreshTicker} onRemove={removeTicker} />}
+          {mode === "compare" && <CompareView equities={equities} metric={metric} />}
+          {mode === "ticker" && selectedEquity && <TickerView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} onRefresh={refreshTicker} onRemove={removeTicker} />}
+          {mode === "models" && selectedEquity && <ModelsView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} />}
         </main>
       </div>
     </div>
@@ -103,63 +145,80 @@ function App() {
 function CompareView({ equities, metric }: { equities: Equity[]; metric: MetricKey }) {
   return (
     <section className="view">
-      <div className="view-title"><div><h1>Cross-company trajectories</h1><span>{equities.length} tickers / actuals and estimates</span></div></div>
+      <div className="view-title"><div><h1>Valuation overview</h1><span>{equities.length} tickers / LTM and forward</span></div></div>
+      <ValuationMatrix equities={equities} />
+      <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
       <MetricChart equities={equities} metric={metric} />
       <div className="small-multiples">
         {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={equities} metric={key} compact />)}
-      </div>
-      <div className="table-wrap comparison-table">
-        <table><thead><tr><th>Ticker</th><th>Price</th><th>1Y</th><th>Latest capex</th><th>2026E capex</th><th>Latest net income</th><th>Trailing P/E</th><th>Forward P/E</th><th>Updated</th></tr></thead>
-          <tbody>{equities.map((equity) => {
-            const actual = latestActual(equity);
-            const estimate = latestEstimate(equity);
-            return <tr key={equity.ticker}><th>{equity.ticker}</th><td>{money(equity.current.price)}</td><td className={tone(equity.current.return1Y)}>{percent(equity.current.return1Y)}</td><td>{formatMetric("capexB", actual?.capexB)}</td><td>{formatMetric("capexB", estimate?.capexB)}</td><td>{formatMetric("netIncomeB", actual?.netIncomeB)}</td><td>{formatMetric("peRatio", equity.current.trailingPE)}</td><td>{formatMetric("peRatio", equity.current.forwardPE)}</td><td>{timeAgo(equity.updatedAt)}</td></tr>;
-          })}</tbody>
-        </table>
       </div>
     </section>
   );
 }
 
-function TickerView({ equity, onRefresh, onRemove }: { equity: Equity; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
-  const actual = latestActual(equity);
-  const estimate = latestEstimate(equity);
-  const capexDelta = delta(estimate?.capexB, actual?.capexB);
+function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
+  const peRow = valuationRows[0];
+  const ebitdaRow = valuationRows[1];
+  const fcfRow = valuationRows[3];
   return (
     <section className="view">
-      <div className="view-title ticker-title">
-        <div><h1>{equity.ticker} <span>{equity.company}</span></h1><small>{equity.sources?.join(" + ") || "Analysis pending"} · {analysisDate(equity)}</small></div>
-        <div className="icon-actions">
-          <button type="button" onClick={() => void onRefresh(equity.ticker)} disabled={equity.status === "refreshing"} aria-label={`Refresh ${equity.ticker}`} title="Refresh analysis"><RefreshCw size={17} className={equity.status === "refreshing" ? "spin" : ""} /></button>
-          <button type="button" onClick={() => void onRemove(equity.ticker)} aria-label={`Remove ${equity.ticker}`} title="Remove ticker"><Trash2 size={17} /></button>
-        </div>
-      </div>
+      <TickerTitle equity={equity} onRefresh={onRefresh} onRemove={onRemove} />
       {equity.status === "error" && <div className="inline-error">{equity.error}</div>}
-      {equity.annuals.length === 0 ? (
-        <div className="analysis-pending">
-          {equity.status !== "error" && <LoaderCircle className="spin" size={20} />}
-          <div><strong>{equity.status === "error" ? "Analysis unavailable" : "Analysis in progress"}</strong><span>{equity.ticker}</span></div>
-        </div>
-      ) : <>
+      {equity.annuals.length === 0 ? <Pending equity={equity} /> : <>
         <div className="metric-strip">
           <Metric label="Price" value={money(equity.current.price)} context={equity.current.return1Y === undefined ? "1Y n/a" : `${percent(equity.current.return1Y)} 1Y`} valueTone={tone(equity.current.return1Y)} />
-          <Metric label="2026E capex" value={formatMetric("capexB", estimate?.capexB)} context={capexDelta === undefined ? "estimate n/a" : `${percent(capexDelta)} vs actual`} valueTone={tone(capexDelta)} />
-          <Metric label="Net income" value={formatMetric("netIncomeB", actual?.netIncomeB)} context={`FY${actual?.fiscalYear ?? "-"}`} />
-          <Metric label="Forward P/E" value={formatMetric("peRatio", equity.current.forwardPE)} context={`Trailing ${formatMetric("peRatio", equity.current.trailingPE)}`} />
+          <Metric label="P/E" value={formatValuation(equity.valuation?.pe, peRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardPe, peRow.kind)}`} />
+          <Metric label="EV / EBITDA" value={formatValuation(equity.valuation?.evToEbitda, ebitdaRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardEvToEbitda, ebitdaRow.kind)}`} />
+          <Metric label="FCF / market cap" value={formatValuation(equity.valuation?.fcfToMarketCap, fcfRow.kind)} context={`Forward ${formatValuation(equity.valuation?.forwardFcfToMarketCap, fcfRow.kind)}`} />
         </div>
-        <div className="detail-charts">
-          <MetricChart equities={[equity]} metric="revenueB" compact />
-          <MetricChart equities={[equity]} metric="capexB" compact />
-          <MetricChart equities={[equity]} metric="netIncomeB" compact />
-          <MetricChart equities={[equity]} metric="dilutedEps" compact />
-          <MetricChart equities={[equity]} metric="peRatio" compact />
-          <PriceChart equity={equity} />
-        </div>
+        {loading && !(equity.quarterlies?.length) ? <PendingDetail ticker={equity.ticker} /> : <>
+          <div className="section-heading"><div><h2>Quarterly trajectories</h2><span>{equity.quarterlies?.length ?? 0} persisted periods</span></div></div>
+          <div className="detail-charts quarterly-charts">
+            <QuarterlyChart equity={equity} metric="revenueB" />
+            <QuarterlyChart equity={equity} metric="ebitdaB" />
+            <QuarterlyChart equity={equity} metric="fcfB" />
+            <QuarterlyChart equity={equity} metric="netDebtB" />
+            <BalanceSheetChart equity={equity} />
+          </div>
+          <QuarterlyTable equity={equity} />
+        </>}
+        <div className="section-heading"><div><h2>Market and annual history</h2><span>{analysisDate(equity)}</span></div></div>
+        <PriceChart equity={equity} />
         <AnnualTable equity={equity} />
       </>}
       {!!equity.warnings?.length && <div className="warnings">{equity.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}
     </section>
   );
+}
+
+function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
+  return (
+    <section className="view">
+      <div className="view-title"><div><h1>{equity.ticker} <span>valuation models</span></h1><small>{equity.company} · {equity.valuation?.asOf ?? analysisDate(equity)}</small></div></div>
+      {loading && !equity.forecast?.forwardFcfB ? <PendingDetail ticker={equity.ticker} /> : <ValuationWorkbench equity={equity} />}
+    </section>
+  );
+}
+
+function TickerTitle({ equity, onRefresh, onRemove }: { equity: Equity; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
+  return <div className="view-title ticker-title">
+    <div><h1>{equity.ticker} <span>{equity.company}</span></h1><small>{equity.sources?.join(" + ") || "Analysis pending"} · {analysisDate(equity)}</small></div>
+    <div className="icon-actions">
+      <button type="button" onClick={() => void onRefresh(equity.ticker)} disabled={equity.status === "refreshing"} aria-label={`Refresh ${equity.ticker}`} title="Refresh analysis"><RefreshCw size={17} className={equity.status === "refreshing" ? "spin" : ""} /></button>
+      <button type="button" onClick={() => void onRemove(equity.ticker)} aria-label={`Remove ${equity.ticker}`} title="Remove ticker"><Trash2 size={17} /></button>
+    </div>
+  </div>;
+}
+
+function Pending({ equity }: { equity: Equity }) {
+  return <div className="analysis-pending">
+    {equity.status !== "error" && <LoaderCircle className="spin" size={20} />}
+    <div><strong>{equity.status === "error" ? "Analysis unavailable" : "Analysis in progress"}</strong><span>{equity.ticker}</span></div>
+  </div>;
+}
+
+function PendingDetail({ ticker }: { ticker: string }) {
+  return <div className="analysis-pending"><LoaderCircle className="spin" size={20} /><div><strong>Loading quarterly archive</strong><span>{ticker}</span></div></div>;
 }
 
 function Metric({ label, value, context, valueTone = "" }: { label: string; value: string; context: string; valueTone?: string }) {

@@ -72,6 +72,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /internal/refresh", s.handleInternalRefresh)
 	s.mux.HandleFunc("GET "+base+"/api/state", s.handleState)
 	s.mux.HandleFunc("POST "+base+"/api/tickers", s.handleAddTicker)
+	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}", s.handleTicker)
 	s.mux.HandleFunc("DELETE "+base+"/api/tickers/{ticker}", s.handleDeleteTicker)
 	s.mux.HandleFunc("POST "+base+"/api/tickers/{ticker}/refresh", s.handleRefreshTicker)
 	s.mux.HandleFunc("GET "+base, s.handleBaseRedirect)
@@ -95,10 +96,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	state := s.service.Snapshot()
+	for _, equity := range state.Tickers {
+		equity.Quarterlies = nil
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"state":   s.service.Snapshot(),
+		"state":   state,
 		"runtime": s.service.Stats(),
 	})
+}
+
+func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
+	ticker := strings.ToUpper(r.PathValue("ticker"))
+	equity, exists := s.service.Snapshot().Tickers[ticker]
+	if !exists {
+		writeError(w, http.StatusNotFound, "ticker not found")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, equity)
 }
 
 func (s *Server) handleAddTicker(w http.ResponseWriter, r *http.Request) {

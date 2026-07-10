@@ -4,11 +4,13 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`. T
 
 ## Data flow
 
-- SEC Company Facts supplies annual revenue, capex, net income, and diluted EPS.
+- SEC Company Facts supplies annual and quarterly statements. Every normalized quarter retains its accession, filing date, form, and SEC filing link; Q4 flow values are derived from the 10-K less Q1-Q3.
 - ThetaData v3 EOD is the preferred price-history source when `THETA_BASE_URL` is configured.
 - Polygon resolves ticker CIKs when the SEC ticker map is unavailable and supplies adjusted daily bars when configured.
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
+
+The comparison response omits full quarterly arrays to keep polling small. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and detailed statement history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
 
 ## Local run
 

@@ -67,6 +67,7 @@ type fact struct {
 	Start string  `json:"start"`
 	End   string  `json:"end"`
 	Val   float64 `json:"val"`
+	Accn  string  `json:"accn"`
 	FY    int     `json:"fy"`
 	FP    string  `json:"fp"`
 	Form  string  `json:"form"`
@@ -88,9 +89,18 @@ func NewSECClient(userAgent, polygonAPIKey string, client *http.Client) *SECClie
 }
 
 func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.Equity) (*model.Equity, error) {
-	company, err := c.lookup(ctx, ticker)
-	if err != nil {
-		return nil, err
+	company := companyTicker{}
+	if existing != nil && existing.CIK != "" {
+		if cik, parseErr := strconv.Atoi(strings.TrimLeft(existing.CIK, "0")); parseErr == nil && cik > 0 {
+			company = companyTicker{CIK: cik, Ticker: strings.ToUpper(ticker), Title: existing.Company}
+		}
+	}
+	if company.CIK == 0 {
+		var err error
+		company, err = c.lookup(ctx, ticker)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var facts companyFacts
 	if err := c.getJSON(ctx, fmt.Sprintf("/api/xbrl/companyfacts/CIK%010d.json", company.CIK), &facts); err != nil {
@@ -100,17 +110,23 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 	if err != nil {
 		return nil, err
 	}
+	cik := fmt.Sprintf("%010d", company.CIK)
+	quarterlies, err := extractQuarterlies(facts, cik)
+	if err != nil {
+		return nil, err
+	}
 	annuals = mergeEstimates(annuals, existing.Annuals)
 	result := &model.Equity{
-		Ticker:   strings.ToUpper(ticker),
-		Company:  facts.EntityName,
-		CIK:      fmt.Sprintf("%010d", company.CIK),
-		Status:   "ready",
-		Sources:  []string{"SEC CompanyFacts"},
-		Annuals:  annuals,
-		Current:  existing.Current,
-		Prices:   existing.Prices,
-		Warnings: nil,
+		Ticker:      strings.ToUpper(ticker),
+		Company:     facts.EntityName,
+		CIK:         cik,
+		Status:      "ready",
+		Sources:     []string{"SEC CompanyFacts"},
+		Annuals:     annuals,
+		Quarterlies: quarterlies,
+		Current:     existing.Current,
+		Prices:      existing.Prices,
+		Warnings:    nil,
 	}
 	if result.Company == "" {
 		result.Company = company.Title
