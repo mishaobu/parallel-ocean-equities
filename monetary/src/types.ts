@@ -61,6 +61,44 @@ export interface MacroSeries {
   error?: string;
   basis?: string;
   points?: MacroPoint[];
+  countries?: CountrySeries[];
+}
+
+export interface CountryPoint {
+  date: string;
+  policyRate?: number;
+  policyRateDate?: string;
+  inflation?: number;
+  inflationDate?: string;
+  coreInflation?: number;
+  coreInflationDate?: string;
+  industrialGrowth?: number;
+  industrialDate?: string;
+  unemployment?: number;
+  unemploymentDate?: string;
+  moneyGrowth?: number;
+  moneyGrowthDate?: string;
+  longRate?: number;
+  longRateDate?: string;
+  realRate?: number;
+  yieldCurve?: number;
+  fx?: number;
+  fxDate?: string;
+  leadingIndex?: number;
+  leadingIndexDate?: string;
+}
+
+export interface CountrySeries {
+  code: string;
+  name: string;
+  currency: string;
+  region: string;
+  policyLabel: string;
+  fxLabel: string;
+  equityTicker?: string;
+  sources?: string[];
+  warnings?: string[];
+  points?: CountryPoint[];
 }
 
 export interface PricePoint { date: string; close: number }

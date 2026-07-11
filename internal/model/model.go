@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 6
+const StateVersion = 7
 
 type AnnualPoint struct {
 	FiscalYear     int      `json:"fiscalYear"`
@@ -165,12 +165,60 @@ type MacroPoint struct {
 }
 
 type MacroSeries struct {
-	UpdatedAt time.Time    `json:"updatedAt,omitempty"`
-	Sources   []string     `json:"sources,omitempty"`
-	Warnings  []string     `json:"warnings,omitempty"`
-	Error     string       `json:"error,omitempty"`
-	Basis     string       `json:"basis,omitempty"`
-	Points    []MacroPoint `json:"points,omitempty"`
+	UpdatedAt time.Time       `json:"updatedAt,omitempty"`
+	Sources   []string        `json:"sources,omitempty"`
+	Warnings  []string        `json:"warnings,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	Basis     string          `json:"basis,omitempty"`
+	Points    []MacroPoint    `json:"points,omitempty"`
+	Countries []CountrySeries `json:"countries,omitempty"`
+	Assets    []AssetSeries   `json:"assets,omitempty"`
+}
+
+type CountryPoint struct {
+	Date              string   `json:"date"`
+	PolicyRate        *float64 `json:"policyRate,omitempty"`
+	PolicyRateDate    string   `json:"policyRateDate,omitempty"`
+	Inflation         *float64 `json:"inflation,omitempty"`
+	InflationDate     string   `json:"inflationDate,omitempty"`
+	CoreInflation     *float64 `json:"coreInflation,omitempty"`
+	CoreInflationDate string   `json:"coreInflationDate,omitempty"`
+	IndustrialGrowth  *float64 `json:"industrialGrowth,omitempty"`
+	IndustrialDate    string   `json:"industrialDate,omitempty"`
+	Unemployment      *float64 `json:"unemployment,omitempty"`
+	UnemploymentDate  string   `json:"unemploymentDate,omitempty"`
+	MoneyGrowth       *float64 `json:"moneyGrowth,omitempty"`
+	MoneyGrowthDate   string   `json:"moneyGrowthDate,omitempty"`
+	LongRate          *float64 `json:"longRate,omitempty"`
+	LongRateDate      string   `json:"longRateDate,omitempty"`
+	RealRate          *float64 `json:"realRate,omitempty"`
+	YieldCurve        *float64 `json:"yieldCurve,omitempty"`
+	FX                *float64 `json:"fx,omitempty"`
+	FXDate            string   `json:"fxDate,omitempty"`
+	LeadingIndex      *float64 `json:"leadingIndex,omitempty"`
+	LeadingIndexDate  string   `json:"leadingIndexDate,omitempty"`
+}
+
+type CountrySeries struct {
+	Code         string         `json:"code"`
+	Name         string         `json:"name"`
+	Currency     string         `json:"currency"`
+	Region       string         `json:"region"`
+	PolicyLabel  string         `json:"policyLabel"`
+	FXLabel      string         `json:"fxLabel"`
+	EquityTicker string         `json:"equityTicker,omitempty"`
+	Sources      []string       `json:"sources,omitempty"`
+	Warnings     []string       `json:"warnings,omitempty"`
+	Points       []CountryPoint `json:"points,omitempty"`
+}
+
+type AssetSeries struct {
+	Symbol string       `json:"symbol"`
+	Label  string       `json:"label"`
+	Group  string       `json:"group"`
+	Region string       `json:"region,omitempty"`
+	Source string       `json:"source,omitempty"`
+	Points []PricePoint `json:"points,omitempty"`
 }
 
 type ForecastModel struct {

@@ -32,6 +32,7 @@ jobs:
           cache-dependency-path: |
             web/package-lock.json
             monetary/package-lock.json
+            macro/package-lock.json
       - run: go test ./...
       - run: npm ci
         working-directory: web
@@ -45,6 +46,12 @@ jobs:
         working-directory: monetary
       - run: npm test -- --run
         working-directory: monetary
+      - run: npm ci
+        working-directory: macro
+      - run: npm run typecheck
+        working-directory: macro
+      - run: npm test -- --run
+        working-directory: macro
 
   image:
     needs: test

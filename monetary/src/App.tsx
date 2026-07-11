@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, ArrowUpRight, BarChart3, Landmark, LoaderCircle } from "lucide-react";
+import { Activity, ArrowUpRight, BarChart3, Globe2, Landmark, LoaderCircle } from "lucide-react";
 import { coherentRegime, pillarSnapshots } from "./analysis";
 import { getState } from "./api";
 import { DateInspector } from "./components/DateInspector";
+import { CountryAnalysis } from "./components/CountryAnalysis";
 import { EpisodeCompare } from "./components/EpisodeCompare";
 import { EquityTransmission } from "./components/EquityTransmission";
 import { FreshnessPanel } from "./components/FreshnessPanel";
@@ -14,11 +15,11 @@ import { rangeDomain, type MacroRange } from "./macroData";
 import type { MacroPoint, MacroSeries, StateResponse } from "./types";
 
 const ranges: MacroRange[] = ["max", "50y", "25y", "10y", "5y"];
-const views = ["overview", "inflation", "liquidity", "rates", "credit", "growth", "equity"] as const;
+const views = ["overview", "countries", "inflation", "liquidity", "rates", "credit", "growth", "equity"] as const;
 type AnalysisView = typeof views[number];
 
 const labels: Record<AnalysisView, string> = {
-  overview: "Overview", inflation: "Inflation", liquidity: "Liquidity", rates: "Rates", credit: "Credit", growth: "Growth", equity: "Equity transmission",
+  overview: "US overview", countries: "Countries", inflation: "Inflation", liquidity: "Liquidity", rates: "Rates", credit: "Credit", growth: "Growth", equity: "Equity transmission",
 };
 const colors = { ink: "#17201b", red: "#b8493e", blue: "#3975a7", green: "#347b57", gold: "#b2832e", violet: "#765997", cyan: "#31838a", rose: "#a34e73" };
 
@@ -79,14 +80,14 @@ function App() {
   return <div className="macro-app">
     <header className="topbar">
       <div className="brand"><Landmark size={21} /><strong>Monetary</strong><span>parallel-ocean</span></div>
-      <nav><a href="/equities/"><BarChart3 size={15} />Equities<ArrowUpRight size={13} /></a></nav>
+      <nav><a href="/equities/"><BarChart3 size={15} />Equities<ArrowUpRight size={13} /></a><a href="/macro/"><Globe2 size={15} />Macro<ArrowUpRight size={13} /></a></nav>
       <div className="status"><span className={refreshing ? "pulse" : ""} />{refreshing ? "Refreshing" : updatedLabel(macro?.updatedAt)}</div>
     </header>
 
     {error && <div className="error-banner" role="alert">{error}</div>}
     <main>
       <section className="page-heading">
-        <div><span className="eyebrow"><Activity size={14} />US macro regime / {regime.point?.date.slice(0, 7) ?? "pending"}</span><h1>{regime.label}</h1><p>{domainLabel(domain)} / {visiblePointCount} monthly rows / {macro?.sources?.length ?? 0} source series</p></div>
+        <div><span className="eyebrow"><Activity size={14} />{view === "countries" ? `${macro?.countries?.length ?? 0} monetary systems` : `US macro regime / ${regime.point?.date.slice(0, 7) ?? "pending"}`}</span><h1>{view === "countries" ? "Global monetary regimes" : regime.label}</h1><p>{domainLabel(domain)} / {view === "countries" ? "metric-level freshness" : `${visiblePointCount} monthly rows`} / {macro?.sources?.length ?? 0} US source series</p></div>
         <div className="segmented" aria-label="Analysis range">
           {ranges.map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
         </div>
@@ -97,8 +98,9 @@ function App() {
       </nav>
 
       {points.length === 0 ? <div className="loading"><LoaderCircle className="spin" size={22} /><span>Macro history refresh pending</span></div> : <>
-        <DateInspector points={points} date={selectedDate} pinned={pinnedDate !== undefined} onClear={() => setPinnedDate(undefined)} />
+        {view !== "countries" && <DateInspector points={points} date={selectedDate} pinned={pinnedDate !== undefined} onClear={() => setPinnedDate(undefined)} />}
         {view === "overview" && <Overview points={points} domain={domain} pillars={pillars} interaction={interaction} pinnedDate={pinnedDate} />}
+        {view === "countries" && <CountryAnalysis countries={macro?.countries ?? []} domain={domain} />}
         {view === "inflation" && <InflationView points={points} domain={domain} interaction={interaction} />}
         {view === "liquidity" && <LiquidityView points={points} domain={domain} interaction={interaction} />}
         {view === "rates" && <RatesView points={points} domain={domain} interaction={interaction} />}

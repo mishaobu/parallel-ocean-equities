@@ -145,12 +145,17 @@ func (f *FREDClient) Analyze(ctx context.Context) (model.MacroSeries, error) {
 			sources = append(sources, "FRED:"+id)
 		}
 	}
+	points := buildMacroPoints(series)
+	countries, countryWarnings := f.analyzeCountries(ctx, points)
+	warnings = append(warnings, countryWarnings...)
+	sort.Strings(warnings)
 	return model.MacroSeries{
 		UpdatedAt: time.Now().UTC(),
 		Sources:   sources,
 		Warnings:  warnings,
 		Basis:     "Latest-revised FRED observations; historical values are not vintage snapshots.",
-		Points:    buildMacroPoints(series),
+		Points:    points,
+		Countries: countries,
 	}, nil
 }
 

@@ -34,18 +34,26 @@ func (f *fakeService) AddTicker(ticker string) error { f.added = ticker; return 
 func TestBasePathAndTickerAPI(t *testing.T) {
 	dir := t.TempDir()
 	monetaryDir := t.TempDir()
+	macroDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<main>equities</main>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(monetaryDir, "index.html"), []byte("<main>monetary</main>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(macroDir, "index.html"), []byte("<main>macro</main>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	state := model.NewState()
 	state.UpdatedAt = time.Now()
 	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}, Valuations: []model.ValuationPoint{{Date: "2026-01-01", PE: floatPtr(20)}}}
-	state.Macro = model.MacroSeries{Points: []model.MacroPoint{{Date: "2026-01-01", Inflation: floatPtr(3), CoreInflation: floatPtr(2.5)}}}
+	state.Macro = model.MacroSeries{
+		Points:    []model.MacroPoint{{Date: "2026-01-01", Inflation: floatPtr(3), CoreInflation: floatPtr(2.5)}},
+		Countries: []model.CountrySeries{{Code: "US", Name: "United States"}},
+		Assets:    []model.AssetSeries{{Symbol: "SPY", Label: "US large cap"}},
+	}
 	service := &fakeService{state: state}
-	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir}).Handler()
+	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir, MacroPath: "/macro", MacroStaticDir: macroDir}).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/equities/", nil)
 	resp := httptest.NewRecorder()
@@ -76,6 +84,16 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("coreInflation")) || !bytes.Contains(resp.Body.Bytes(), []byte("valuations")) || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) {
 		t.Fatalf("monetary state should include full macro and compact equities: %d %s", resp.Code, resp.Body.String())
+	}
+	if !bytes.Contains(resp.Body.Bytes(), []byte("countries")) || bytes.Contains(resp.Body.Bytes(), []byte("assets")) {
+		t.Fatalf("monetary state should include countries but omit cross-assets: %s", resp.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/macro/api/state", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("countries")) || !bytes.Contains(resp.Body.Bytes(), []byte("assets")) {
+		t.Fatalf("macro state should include countries and cross-assets: %d %s", resp.Code, resp.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN", nil)

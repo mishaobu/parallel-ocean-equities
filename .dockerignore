@@ -5,4 +5,6 @@ web/dist
 web/node_modules
 monetary/dist
 monetary/node_modules
+macro/dist
+macro/node_modules
 *.md

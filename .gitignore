@@ -13,4 +13,9 @@ monetary/node_modules/
 monetary/*.tsbuildinfo
 monetary/vite.config.js
 monetary/vite.config.d.ts
+macro/dist/
+macro/node_modules/
+macro/*.tsbuildinfo
+macro/vite.config.js
+macro/vite.config.d.ts
 /equities

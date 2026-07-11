@@ -34,6 +34,8 @@ type Config struct {
 	StaticDir         string
 	MonetaryPath      string
 	MonetaryStaticDir string
+	MacroPath         string
+	MacroStaticDir    string
 	RefreshToken      string
 	Logger            *slog.Logger
 }
@@ -53,6 +55,10 @@ func New(service EquityService, config Config) *Server {
 	config.MonetaryPath = "/" + strings.Trim(strings.TrimSpace(config.MonetaryPath), "/")
 	if config.MonetaryPath == "/" {
 		config.MonetaryPath = "/monetary"
+	}
+	config.MacroPath = "/" + strings.Trim(strings.TrimSpace(config.MacroPath), "/")
+	if config.MacroPath == "/" {
+		config.MacroPath = "/macro"
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
@@ -94,6 +100,16 @@ func (s *Server) routes() {
 		})
 		s.mux.HandleFunc("GET "+monetary+"/", func(w http.ResponseWriter, r *http.Request) {
 			s.serveStatic(w, r, monetary, s.config.MonetaryStaticDir)
+		})
+	}
+	if s.config.MacroStaticDir != "" && s.config.MacroPath != base && s.config.MacroPath != s.config.MonetaryPath {
+		macro := s.config.MacroPath
+		s.mux.HandleFunc("GET "+macro+"/api/state", s.handleMacroState)
+		s.mux.HandleFunc("GET "+macro, func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, macro+"/", http.StatusPermanentRedirect)
+		})
+		s.mux.HandleFunc("GET "+macro+"/", func(w http.ResponseWriter, r *http.Request) {
+			s.serveStatic(w, r, macro, s.config.MacroStaticDir)
 		})
 	}
 	s.mux.HandleFunc("GET /", s.handleRoot)
@@ -139,12 +155,27 @@ func (s *Server) handleMonetaryState(w http.ResponseWriter, _ *http.Request) {
 	for ticker, equity := range state.Tickers {
 		equities[ticker] = monetaryEquity{Ticker: equity.Ticker, Company: equity.Company, Prices: compactPrices(equity.Prices), Valuations: equity.Valuations}
 	}
+	macro := state.Macro
+	macro.Assets = nil
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"state": map[string]any{
 			"version":   state.Version,
 			"updatedAt": state.UpdatedAt,
 			"tickers":   equities,
+			"macro":     macro,
+		},
+		"runtime": s.service.Stats(),
+	})
+}
+
+func (s *Server) handleMacroState(w http.ResponseWriter, _ *http.Request) {
+	state := s.service.Snapshot()
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"state": map[string]any{
+			"version":   state.Version,
+			"updatedAt": state.UpdatedAt,
 			"macro":     state.Macro,
 		},
 		"runtime": s.service.Stats(),
@@ -195,6 +226,8 @@ func compactMacro(series model.MacroSeries) model.MacroSeries {
 		})
 	}
 	series.Points = points
+	series.Countries = nil
+	series.Assets = nil
 	return series
 }
 

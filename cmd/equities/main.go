@@ -33,7 +33,11 @@ func main() {
 		analysis.NewPolygonMarket(polygonAPIKey, httpClient),
 	)
 	pipeline := &analysis.Pipeline{SEC: sec, Market: market}
-	service := analysis.NewService(state, pipeline).WithMacro(analysis.NewFREDClient(env("FRED_USER_AGENT", "parallel-ocean-equities/1.0 (https://parallel-ocean.xyz/equities)"), httpClient))
+	macro := analysis.NewMacroPipeline(
+		analysis.NewFREDClient(env("FRED_USER_AGENT", "parallel-ocean-equities/1.0 (https://parallel-ocean.xyz/equities)"), httpClient),
+		market,
+	)
+	service := analysis.NewService(state, pipeline).WithMacro(macro)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -56,6 +60,8 @@ func main() {
 		StaticDir:         env("STATIC_DIR", "/app/web"),
 		MonetaryPath:      env("MONETARY_PATH", "/monetary"),
 		MonetaryStaticDir: env("MONETARY_STATIC_DIR", "/app/monetary"),
+		MacroPath:         env("MACRO_PATH", "/macro"),
+		MacroStaticDir:    env("MACRO_STATIC_DIR", "/app/macro"),
 		RefreshToken:      os.Getenv("REFRESH_TOKEN"),
 		Logger:            logger,
 	})

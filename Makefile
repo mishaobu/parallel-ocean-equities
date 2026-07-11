@@ -8,17 +8,22 @@ test:
 	npm --prefix monetary ci
 	npm --prefix monetary run typecheck
 	npm --prefix monetary test -- --run
+	npm --prefix macro ci
+	npm --prefix macro run typecheck
+	npm --prefix macro test -- --run
 
 build:
 	npm --prefix web ci
 	npm --prefix web run build
 	npm --prefix monetary ci
 	npm --prefix monetary run build
+	npm --prefix macro ci
+	npm --prefix macro run build
 	go build -o equities ./cmd/equities
 
 run: build
 	mkdir -p runtime
-	DATA_FILE=runtime/state.json SEED_FILE=data/seed.json STATIC_DIR=web/dist MONETARY_STATIC_DIR=monetary/dist ./equities
+	DATA_FILE=runtime/state.json SEED_FILE=data/seed.json STATIC_DIR=web/dist MONETARY_STATIC_DIR=monetary/dist MACRO_STATIC_DIR=macro/dist ./equities
 
 image:
 	docker build -t parallel-ocean-equities:local .
