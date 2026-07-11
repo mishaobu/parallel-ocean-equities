@@ -11,6 +11,11 @@ import (
 
 var (
 	operatingIncomeTags = []string{"OperatingIncomeLoss"}
+	grossProfitTags     = []string{"GrossProfit"}
+	costOfRevenueTags   = []string{"CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoodsAndServicesExcludingDepreciationDepletionAndAmortization"}
+	pretaxIncomeTags    = []string{"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"}
+	incomeTaxTags       = []string{"IncomeTaxExpenseBenefit"}
+	stockCompTags       = []string{"ShareBasedCompensation"}
 	daTags              = []string{"DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation"}
 	operatingCashTags   = []string{"NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"}
 	dividendTags        = []string{"PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"}
@@ -23,6 +28,9 @@ var (
 	assetTags           = []string{"Assets"}
 	liabilityTags       = []string{"Liabilities"}
 	equityTags          = []string{"StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"}
+	inventoryTags       = []string{"InventoryNet", "InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"}
+	receivableTags      = []string{"AccountsReceivableNetCurrent", "AccountsNotesAndLoansReceivableNetCurrent"}
+	payableTags         = []string{"AccountsPayableCurrent"}
 )
 
 type quarterFact struct {
@@ -52,7 +60,12 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 	}
 
 	operatingIncome := durationQuarterFacts(gaap, operatingIncomeTags, "USD")
+	grossProfit := durationQuarterFacts(gaap, grossProfitTags, "USD")
+	costOfRevenue := durationQuarterFacts(gaap, costOfRevenueTags, "USD")
 	netIncome := durationQuarterFacts(gaap, netIncomeTags, "USD")
+	pretaxIncome := durationQuarterFacts(gaap, pretaxIncomeTags, "USD")
+	incomeTax := durationQuarterFacts(gaap, incomeTaxTags, "USD")
+	stockComp := durationQuarterFacts(gaap, stockCompTags, "USD")
 	da := durationQuarterFacts(gaap, daTags, "USD")
 	operatingCash := durationQuarterFacts(gaap, operatingCashTags, "USD")
 	capex := durationQuarterFacts(gaap, capexTags, "USD")
@@ -71,6 +84,9 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 	assets := instantQuarterFacts(gaap, assetTags, "USD")
 	liabilities := instantQuarterFacts(gaap, liabilityTags, "USD")
 	equity := instantQuarterFacts(gaap, equityTags, "USD")
+	inventory := instantQuarterFacts(gaap, inventoryTags, "USD")
+	receivables := instantQuarterFacts(gaap, receivableTags, "USD")
+	payables := instantQuarterFacts(gaap, payableTags, "USD")
 
 	rows := make([]model.QuarterlyPoint, 0, len(anchors))
 	for periodEnd, anchor := range anchors {
@@ -88,9 +104,16 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 			Derived:       anchor.derived,
 		}
 		row.RevenueB = quarterBillions(revenue[periodEnd])
+		row.GrossProfitB = quarterBillions(grossProfit[periodEnd])
+		if row.GrossProfitB == nil {
+			row.GrossProfitB = subtractKnown(row.RevenueB, quarterBillions(costOfRevenue[periodEnd]))
+		}
 		row.EBITB = quarterBillions(operatingIncome[periodEnd])
 		row.DAB = quarterBillions(da[periodEnd])
 		row.NetIncomeB = quarterBillions(netIncome[periodEnd])
+		row.PretaxIncomeB = quarterBillions(pretaxIncome[periodEnd])
+		row.IncomeTaxB = quarterBillions(incomeTax[periodEnd])
+		row.StockCompB = quarterBillions(stockComp[periodEnd])
 		row.OperatingCashB = quarterBillions(operatingCash[periodEnd])
 		row.CapexB = quarterBillions(capex[periodEnd])
 		row.DividendsB = quarterBillions(dividends[periodEnd])
@@ -106,6 +129,9 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 		row.AssetsB = quarterBillions(assets[periodEnd])
 		row.LiabilitiesB = quarterBillions(liabilities[periodEnd])
 		row.EquityB = quarterBillions(equity[periodEnd])
+		row.InventoryB = quarterBillions(inventory[periodEnd])
+		row.ReceivablesB = quarterBillions(receivables[periodEnd])
+		row.PayablesB = quarterBillions(payables[periodEnd])
 
 		row.DebtB = addKnown(quarterBillions(currentDebt[periodEnd]), quarterBillions(noncurrentDebt[periodEnd]))
 		if row.DebtB == nil {

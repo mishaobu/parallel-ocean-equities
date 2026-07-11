@@ -5,6 +5,7 @@ export interface AnnualPoint {
   periodEnd?: string;
   filedAt?: string;
   revenueB?: number;
+  grossProfitB?: number;
   ebitB?: number;
   daB?: number;
   ebitdaB?: number;
@@ -13,12 +14,21 @@ export interface AnnualPoint {
   fcfB?: number;
   dividendsB?: number;
   netIncomeB?: number;
+  pretaxIncomeB?: number;
+  incomeTaxB?: number;
+  stockCompB?: number;
   dilutedEps?: number;
   dilutedSharesB?: number;
   cashB?: number;
   investmentsB?: number;
   debtB?: number;
   netDebtB?: number;
+  inventoryB?: number;
+  receivablesB?: number;
+  payablesB?: number;
+  assetsB?: number;
+  liabilitiesB?: number;
+  equityB?: number;
   peRatio?: number;
   estimate?: boolean;
   confidence?: string;
@@ -39,10 +49,14 @@ export interface QuarterlyPoint {
   filingUrl?: string;
   derived?: boolean;
   revenueB?: number;
+  grossProfitB?: number;
   ebitB?: number;
   daB?: number;
   ebitdaB?: number;
   netIncomeB?: number;
+  pretaxIncomeB?: number;
+  incomeTaxB?: number;
+  stockCompB?: number;
   operatingCashB?: number;
   capexB?: number;
   fcfB?: number;
@@ -53,6 +67,9 @@ export interface QuarterlyPoint {
   investmentsB?: number;
   debtB?: number;
   netDebtB?: number;
+  inventoryB?: number;
+  receivablesB?: number;
+  payablesB?: number;
   assetsB?: number;
   liabilitiesB?: number;
   equityB?: number;
@@ -107,6 +124,27 @@ export interface ValuationPoint {
   forwardNetDebtToEbitda?: number;
   dividendToFcf?: number;
   forwardDividendToFcf?: number;
+}
+
+export interface QualityMetrics {
+  asOf?: string;
+  cashConversion?: number;
+  grossMargin?: number;
+  operatingMargin?: number;
+  operatingCashMargin?: number;
+  fcfMargin?: number;
+  inventoryDays?: number;
+  receivableDays?: number;
+  payableDays?: number;
+  cashConversionCycleDays?: number;
+  roic?: number;
+  incrementalRoic?: number;
+  stockCompToRevenue?: number;
+  dilutedShareGrowth?: number;
+}
+
+export interface QualityPoint extends Omit<QualityMetrics, "asOf"> {
+  date: string;
 }
 
 export interface MacroPoint {
@@ -210,6 +248,8 @@ export interface Equity {
   forecast?: ForecastModel;
   models?: ValuationModels;
   valuations?: ValuationPoint[];
+  quality?: QualityMetrics;
+  qualities?: QualityPoint[];
 }
 
 export interface RuntimeStats {

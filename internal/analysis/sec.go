@@ -320,10 +320,15 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		return nil, errors.New("SEC response has no us-gaap facts")
 	}
 	revenue := annualFacts(gaap, revenueTags, "USD")
+	grossProfit := annualFacts(gaap, grossProfitTags, "USD")
+	costOfRevenue := annualFacts(gaap, costOfRevenueTags, "USD")
 	operatingIncome := annualFacts(gaap, operatingIncomeTags, "USD")
 	da := annualFacts(gaap, daTags, "USD")
 	operatingCash := annualFacts(gaap, operatingCashTags, "USD")
 	netIncome := annualFacts(gaap, netIncomeTags, "USD")
+	pretaxIncome := annualFacts(gaap, pretaxIncomeTags, "USD")
+	incomeTax := annualFacts(gaap, incomeTaxTags, "USD")
+	stockComp := annualFacts(gaap, stockCompTags, "USD")
 	capex := annualFacts(gaap, capexTags, "USD")
 	dividends := annualFacts(gaap, dividendTags, "USD")
 	eps := annualFacts(gaap, epsTags, "USD/shares")
@@ -336,6 +341,12 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 	currentDebt := annualInstantFacts(gaap, currentDebtTags, "USD")
 	noncurrentDebt := annualInstantFacts(gaap, noncurrentDebtTags, "USD")
 	totalDebt := annualInstantFacts(gaap, totalDebtTags, "USD")
+	assets := annualInstantFacts(gaap, assetTags, "USD")
+	liabilities := annualInstantFacts(gaap, liabilityTags, "USD")
+	equity := annualInstantFacts(gaap, equityTags, "USD")
+	inventory := annualInstantFacts(gaap, inventoryTags, "USD")
+	receivables := annualInstantFacts(gaap, receivableTags, "USD")
+	payables := annualInstantFacts(gaap, payableTags, "USD")
 	anchors := revenue
 	if len(anchors) == 0 {
 		anchors = netIncome
@@ -359,8 +370,25 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		if value, ok := revenue[period]; ok {
 			row.RevenueB = floatPtr(value.Val / 1e9)
 		}
+		if value, ok := grossProfit[period]; ok {
+			row.GrossProfitB = floatPtr(value.Val / 1e9)
+		}
+		if row.GrossProfitB == nil {
+			if value, ok := costOfRevenue[period]; ok {
+				row.GrossProfitB = subtractKnown(row.RevenueB, floatPtr(value.Val/1e9))
+			}
+		}
 		if value, ok := netIncome[period]; ok {
 			row.NetIncomeB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := pretaxIncome[period]; ok {
+			row.PretaxIncomeB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := incomeTax[period]; ok {
+			row.IncomeTaxB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := stockComp[period]; ok {
+			row.StockCompB = floatPtr(value.Val / 1e9)
 		}
 		if value, ok := operatingIncome[period]; ok {
 			row.EBITB = floatPtr(value.Val / 1e9)
@@ -410,6 +438,30 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		liquidity := addKnown(row.CashB, row.InvestmentsB)
 		if row.DebtB != nil && liquidity != nil {
 			row.NetDebtB = floatPtr(*row.DebtB - *liquidity)
+		}
+		if value, ok := assets[anchor.End]; ok {
+			row.AssetsB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := liabilities[anchor.End]; ok {
+			row.LiabilitiesB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := equity[anchor.End]; ok {
+			row.EquityB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := inventory[anchor.End]; ok {
+			row.InventoryB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := receivables[anchor.End]; ok {
+			row.ReceivablesB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := payables[anchor.End]; ok {
+			row.PayablesB = floatPtr(value.Val / 1e9)
+		}
+		if row.LiabilitiesB == nil && row.AssetsB != nil && row.EquityB != nil {
+			row.LiabilitiesB = floatPtr(*row.AssetsB - *row.EquityB)
+		}
+		if row.EquityB == nil && row.AssetsB != nil && row.LiabilitiesB != nil {
+			row.EquityB = floatPtr(*row.AssetsB - *row.LiabilitiesB)
 		}
 		rows = append(rows, row)
 	}

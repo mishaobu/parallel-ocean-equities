@@ -72,6 +72,7 @@ func (p *Pipeline) Analyze(ctx context.Context, ticker string, existing *model.E
 		result.InstrumentType = "Equity"
 	}
 	normalizePerShareInputs(result)
+	enrichQuality(result)
 	if p.Market == nil {
 		if profile.marketOnly && len(result.Prices) == 0 {
 			return nil, ErrNoMarketProvider

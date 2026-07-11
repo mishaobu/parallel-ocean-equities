@@ -14,6 +14,24 @@ Core definitions:
 - `Market cap = latest adjusted close x latest diluted weighted-average shares`
 - `Enterprise value = market cap + net debt`
 
+Operating-quality definitions:
+
+- `Cash conversion = trailing operating cash flow / trailing net income`; unavailable when net income is nonpositive.
+- `Gross margin = gross profit / revenue`; when gross profit is not reported directly, it is revenue less reported cost of revenue.
+- `Operating, OCF, and FCF margins = the corresponding trailing value / trailing revenue`.
+- `Inventory days = average inventory / trailing cost of goods sold x 365`.
+- `Receivable days = average net current receivables / trailing revenue x 365`.
+- `Payable days = average current payables / trailing cost of goods sold x 365`.
+- `Cash conversion cycle = inventory days + receivable days - payable days`.
+- `NOPAT = EBIT x (1 - cash tax rate)`; the cash tax rate is trailing tax expense / pretax income, bounded from 0% to 35%, with a 21% fallback.
+- `Invested capital = debt + stockholders' equity - cash - current investments`.
+- `ROIC = trailing NOPAT / average invested capital`.
+- `Incremental ROIC = change in trailing NOPAT / positive change in invested capital`; unavailable when incremental capital is nonpositive.
+- `Stock compensation / revenue = trailing share-based compensation expense / trailing revenue`.
+- `Diluted share growth = latest diluted shares / diluted shares one year earlier - 1`.
+
+Working-capital balances and invested capital use the average of current and one-year-prior observations when both are available. Debt is treated as zero for invested-capital calculations only when the filing provides equity and cash but no debt concept.
+
 Trailing values sum the latest four quarters. Negative earnings and operating denominators are displayed as not meaningful where a valuation multiple would otherwise be misleading. Negative net debt remains visible as net cash.
 
 ## Model values
@@ -27,6 +45,8 @@ All model ratios use current market cap, enterprise value, and net debt with the
 Historical ratios are dated when the corresponding filing became public and use the latest close available on or before that filing date. Quarterly history uses diluted shares, net debt, and the trailing four normalized quarters. Before four-quarter XBRL coverage begins, full-year SEC facts provide annual valuation observations. Historical P/E uses market cap divided by trailing net income so price, earnings, and shares remain on one split-adjusted basis. Clearly inconsistent SEC per-share facts are repaired from net income and the nearest plausible diluted-share observation; multiples above 200x are treated as not meaningful. The price provider is asked for history from January 1980; if the configured plan rejects that range, the service retains a nine-year fallback and records a warning.
 
 Historical `N12M realized` points use the next four subsequently reported quarters, or the next full-year filing in the annual fallback period. They are hindsight outcomes, not estimates that were available on the historical date. Current internal model values are intentionally excluded from this series and appear only in the current valuation table and model workspace.
+
+Operating-quality histories use the same filing-availability dates. Quarterly points use trailing four-quarter flows and current versus one-year-prior balance-sheet observations; older history falls back to annual filings. Interactive y-axes fit the selected date window. An isolated observation is excluded from the displayed axis only when it is an extreme interquartile-range outlier and both adjacent observations return inside the normal range; persistent level shifts are retained.
 
 ## Monetary context
 

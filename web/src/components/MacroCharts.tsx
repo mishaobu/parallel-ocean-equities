@@ -1,4 +1,5 @@
-import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
 import { macroHistoryRows } from "../historyData";
 import { descendingTooltipItem } from "../chartData";
 import type { MacroPoint, MacroSeries } from "../types";
@@ -54,22 +55,29 @@ export function MacroCharts({ macro, domain }: { macro?: MacroSeries; domain: [n
     return <div className="chart macro-empty"><div className="chart-empty">Macro history refresh pending{macro?.error ? `: ${macro.error}` : ""}</div></div>;
   }
   return <div className="macro-grid">
-    {panels.map((panel) => <div className="chart chart-compact macro-chart" key={panel.title}>
-      <div className="chart-heading"><strong>{panel.title}</strong><span>{panel.unit === "log" ? "log10 / USD billions" : "percent"}</span></div>
-      <div className="chart-canvas">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 12, right: 16, bottom: 2, left: -6 }}>
-            <CartesianGrid vertical={false} stroke="#e5e9e6" />
-            <XAxis dataKey="date" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />
-            <YAxis domain={panel.unit === "log" ? ["auto", "auto"] : undefined} tickFormatter={(value) => formatMacro(Number(value), panel.unit)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={55} />
-            <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatMacro(Number(value), panel.unit)} labelFormatter={(value) => dateLabel(Number(value))} />
-            <Legend iconType="line" wrapperStyle={{ fontSize: 11 }} />
-            {panel.zero && <ReferenceLine y={0} stroke="#aeb8b1" strokeDasharray="3 3" />}
-            {panel.lines.map((line) => <Line key={line.key} type="monotone" dataKey={line.key} name={line.label} stroke={line.color} strokeWidth={1.8} dot={false} connectNulls isAnimationActive={false} />)}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>)}
+    {panels.map((panel) => <MacroChart key={panel.title} panel={panel} data={data} domain={domain} />)}
+  </div>;
+}
+
+function MacroChart({ panel, data, domain }: { panel: typeof panels[number]; data: ReturnType<typeof macroHistoryRows>; domain: [number, number] }) {
+  const keys = panel.lines.map((line) => line.key);
+  const legend = useLegendFilter(keys);
+  const chart = useChartZoom(domain, 20*24*60*60*1000);
+  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: panel.zero });
+  return <div className="chart chart-compact macro-chart">
+    <div className="chart-heading"><strong>{panel.title}</strong><ChartHeadingMeta unit={panel.unit === "log" ? "log10 / USD billions" : "percent"} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+    <div className="chart-canvas"><ResponsiveContainer width="100%" height="100%">
+      <LineChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: -6 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
+        <CartesianGrid vertical={false} stroke="#e5e9e6" />
+        <XAxis dataKey="date" type="number" scale="time" domain={chart.activeDomain} allowDataOverflow tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />
+        <YAxis domain={fitted.domain} allowDataOverflow tickFormatter={(value) => formatMacro(Number(value), panel.unit)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={55} />
+        <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatMacro(Number(value), panel.unit)} labelFormatter={(value) => dateLabel(Number(value))} />
+        <Legend iconType="line" wrapperStyle={{ fontSize: 11, cursor: "pointer" }} onClick={(event) => legend.toggle(String(event.dataKey ?? ""))} />
+        {panel.zero && <ReferenceLine y={0} stroke="#aeb8b1" strokeDasharray="3 3" />}
+        {chart.selection && <ReferenceArea x1={chart.selection[0]} x2={chart.selection[1]} fill="#7a9b88" fillOpacity={0.16} strokeOpacity={0} />}
+        {panel.lines.map((line) => <Line key={line.key} type="monotone" dataKey={line.key} name={line.label} stroke={line.color} strokeWidth={1.8} dot={false} connectNulls hide={legend.hidden.has(line.key)} isAnimationActive={false} />)}
+      </LineChart>
+    </ResponsiveContainer></div>
   </div>;
 }
 

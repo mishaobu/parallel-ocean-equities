@@ -2,13 +2,14 @@ package model
 
 import "time"
 
-const StateVersion = 9
+const StateVersion = 10
 
 type AnnualPoint struct {
 	FiscalYear     int      `json:"fiscalYear"`
 	PeriodEnd      string   `json:"periodEnd,omitempty"`
 	FiledAt        string   `json:"filedAt,omitempty"`
 	RevenueB       *float64 `json:"revenueB,omitempty"`
+	GrossProfitB   *float64 `json:"grossProfitB,omitempty"`
 	EBITB          *float64 `json:"ebitB,omitempty"`
 	DAB            *float64 `json:"daB,omitempty"`
 	EBITDAB        *float64 `json:"ebitdaB,omitempty"`
@@ -17,12 +18,21 @@ type AnnualPoint struct {
 	FCFB           *float64 `json:"fcfB,omitempty"`
 	DividendsB     *float64 `json:"dividendsB,omitempty"`
 	NetIncomeB     *float64 `json:"netIncomeB,omitempty"`
+	PretaxIncomeB  *float64 `json:"pretaxIncomeB,omitempty"`
+	IncomeTaxB     *float64 `json:"incomeTaxB,omitempty"`
+	StockCompB     *float64 `json:"stockCompB,omitempty"`
 	DilutedEPS     *float64 `json:"dilutedEps,omitempty"`
 	DilutedSharesB *float64 `json:"dilutedSharesB,omitempty"`
 	CashB          *float64 `json:"cashB,omitempty"`
 	InvestmentsB   *float64 `json:"investmentsB,omitempty"`
 	DebtB          *float64 `json:"debtB,omitempty"`
 	NetDebtB       *float64 `json:"netDebtB,omitempty"`
+	InventoryB     *float64 `json:"inventoryB,omitempty"`
+	ReceivablesB   *float64 `json:"receivablesB,omitempty"`
+	PayablesB      *float64 `json:"payablesB,omitempty"`
+	AssetsB        *float64 `json:"assetsB,omitempty"`
+	LiabilitiesB   *float64 `json:"liabilitiesB,omitempty"`
+	EquityB        *float64 `json:"equityB,omitempty"`
 	PERatio        *float64 `json:"peRatio,omitempty"`
 	Estimate       bool     `json:"estimate,omitempty"`
 	Confidence     string   `json:"confidence,omitempty"`
@@ -43,10 +53,14 @@ type QuarterlyPoint struct {
 	FilingURL      string   `json:"filingUrl,omitempty"`
 	Derived        bool     `json:"derived,omitempty"`
 	RevenueB       *float64 `json:"revenueB,omitempty"`
+	GrossProfitB   *float64 `json:"grossProfitB,omitempty"`
 	EBITB          *float64 `json:"ebitB,omitempty"`
 	DAB            *float64 `json:"daB,omitempty"`
 	EBITDAB        *float64 `json:"ebitdaB,omitempty"`
 	NetIncomeB     *float64 `json:"netIncomeB,omitempty"`
+	PretaxIncomeB  *float64 `json:"pretaxIncomeB,omitempty"`
+	IncomeTaxB     *float64 `json:"incomeTaxB,omitempty"`
+	StockCompB     *float64 `json:"stockCompB,omitempty"`
 	OperatingCashB *float64 `json:"operatingCashB,omitempty"`
 	CapexB         *float64 `json:"capexB,omitempty"`
 	FCFB           *float64 `json:"fcfB,omitempty"`
@@ -57,6 +71,9 @@ type QuarterlyPoint struct {
 	InvestmentsB   *float64 `json:"investmentsB,omitempty"`
 	DebtB          *float64 `json:"debtB,omitempty"`
 	NetDebtB       *float64 `json:"netDebtB,omitempty"`
+	InventoryB     *float64 `json:"inventoryB,omitempty"`
+	ReceivablesB   *float64 `json:"receivablesB,omitempty"`
+	PayablesB      *float64 `json:"payablesB,omitempty"`
 	AssetsB        *float64 `json:"assetsB,omitempty"`
 	LiabilitiesB   *float64 `json:"liabilitiesB,omitempty"`
 	EquityB        *float64 `json:"equityB,omitempty"`
@@ -111,6 +128,40 @@ type ValuationPoint struct {
 	ForwardNetDebtToEBITDA          *float64 `json:"forwardNetDebtToEbitda,omitempty"`
 	DividendToFCF                   *float64 `json:"dividendToFcf,omitempty"`
 	ForwardDividendToFCF            *float64 `json:"forwardDividendToFcf,omitempty"`
+}
+
+type QualityMetrics struct {
+	AsOf                    string   `json:"asOf,omitempty"`
+	CashConversion          *float64 `json:"cashConversion,omitempty"`
+	GrossMargin             *float64 `json:"grossMargin,omitempty"`
+	OperatingMargin         *float64 `json:"operatingMargin,omitempty"`
+	OperatingCashMargin     *float64 `json:"operatingCashMargin,omitempty"`
+	FCFMargin               *float64 `json:"fcfMargin,omitempty"`
+	InventoryDays           *float64 `json:"inventoryDays,omitempty"`
+	ReceivableDays          *float64 `json:"receivableDays,omitempty"`
+	PayableDays             *float64 `json:"payableDays,omitempty"`
+	CashConversionCycleDays *float64 `json:"cashConversionCycleDays,omitempty"`
+	ROIC                    *float64 `json:"roic,omitempty"`
+	IncrementalROIC         *float64 `json:"incrementalRoic,omitempty"`
+	StockCompToRevenue      *float64 `json:"stockCompToRevenue,omitempty"`
+	DilutedShareGrowth      *float64 `json:"dilutedShareGrowth,omitempty"`
+}
+
+type QualityPoint struct {
+	Date                    string   `json:"date"`
+	CashConversion          *float64 `json:"cashConversion,omitempty"`
+	GrossMargin             *float64 `json:"grossMargin,omitempty"`
+	OperatingMargin         *float64 `json:"operatingMargin,omitempty"`
+	OperatingCashMargin     *float64 `json:"operatingCashMargin,omitempty"`
+	FCFMargin               *float64 `json:"fcfMargin,omitempty"`
+	InventoryDays           *float64 `json:"inventoryDays,omitempty"`
+	ReceivableDays          *float64 `json:"receivableDays,omitempty"`
+	PayableDays             *float64 `json:"payableDays,omitempty"`
+	CashConversionCycleDays *float64 `json:"cashConversionCycleDays,omitempty"`
+	ROIC                    *float64 `json:"roic,omitempty"`
+	IncrementalROIC         *float64 `json:"incrementalRoic,omitempty"`
+	StockCompToRevenue      *float64 `json:"stockCompToRevenue,omitempty"`
+	DilutedShareGrowth      *float64 `json:"dilutedShareGrowth,omitempty"`
 }
 
 type MacroPoint struct {
@@ -337,6 +388,8 @@ type Equity struct {
 	Forecast       ForecastModel    `json:"forecast"`
 	Models         ValuationModels  `json:"models"`
 	Valuations     []ValuationPoint `json:"valuations,omitempty"`
+	Quality        QualityMetrics   `json:"quality"`
+	Qualities      []QualityPoint   `json:"qualities,omitempty"`
 }
 
 type State struct {

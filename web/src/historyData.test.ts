@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { historyDomain, indexedPerformanceRows, macroHistoryRows, valuationHistoryDomain, valuationHistoryRows } from "./historyData";
+import { historyDomain, indexedPerformanceRows, macroHistoryRows, qualityHistoryRows, valuationHistoryDomain, valuationHistoryRows } from "./historyData";
 import type { Equity } from "./types";
 import { valuationRows } from "./valuationData";
+import { qualityRows } from "./qualityData";
 
 const equities = [{
   ticker: "AMZN",
@@ -11,6 +12,10 @@ const equities = [{
   valuations: [
     { date: "2010-01-01", pe: 20, forwardPe: 18 },
     { date: "2020-01-01", pe: 30, forwardPe: 25 },
+  ],
+  qualities: [
+    { date: "2010-01-01", roic: 0.1 },
+    { date: "2020-01-01", roic: 0.2 },
   ],
   prices: [{ date: "2005-01-01", close: 10 }, { date: "2020-01-01", close: 30 }],
 }] satisfies Equity[];
@@ -45,5 +50,12 @@ describe("historical chart data", () => {
     const rows = macroHistoryRows([{ date: "2010-01-01", inflation: 2 }, { date: "2020-01-01", inflation: 3 }], [Date.parse("2015-01-01"), Date.parse("2025-01-01")]);
     expect(rows).toHaveLength(1);
     expect(rows[0].inflation).toBe(3);
+  });
+
+  it("builds quality histories for the selected filing-date range", () => {
+    const metric = qualityRows.find((row) => row.key === "roic")!;
+    expect(qualityHistoryRows(equities, metric, [Date.parse("2015-01-01"), Date.parse("2026-01-01")])).toEqual([
+      { date: Date.parse("2020-01-01"), AMZN: 0.2 },
+    ]);
   });
 });

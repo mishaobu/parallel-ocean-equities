@@ -103,8 +103,15 @@ func TestExtractQuarterliesUsesCombinedShortAndLongTermDebt(t *testing.T) {
 		"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(
 			quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 100e9),
 		),
+		"GrossProfit": durationConcept(quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 40e9)),
+		"IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments": durationConcept(quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 20e9)),
+		"IncomeTaxExpenseBenefit":                durationConcept(quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 4e9)),
+		"ShareBasedCompensation":                 durationConcept(quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 1e9)),
 		"CashAndCashEquivalentsAtCarryingValue":  instantConceptAt(2024, "Q1", "2024-03-31", 10e9),
 		"DebtLongtermAndShorttermCombinedAmount": instantConceptAt(2024, "Q1", "2024-03-31", 50e9),
+		"InventoryNet":                           instantConceptAt(2024, "Q1", "2024-03-31", 30e9),
+		"AccountsReceivableNetCurrent":           instantConceptAt(2024, "Q1", "2024-03-31", 20e9),
+		"AccountsPayableCurrent":                 instantConceptAt(2024, "Q1", "2024-03-31", 15e9),
 	}}}
 
 	rows, err := extractQuarterlies(response, "0000000001")
@@ -116,6 +123,13 @@ func TestExtractQuarterliesUsesCombinedShortAndLongTermDebt(t *testing.T) {
 	}
 	assertFloat(t, "combined debt", rows[0].DebtB, 50)
 	assertFloat(t, "combined debt net debt", rows[0].NetDebtB, 40)
+	assertFloat(t, "gross profit", rows[0].GrossProfitB, 40)
+	assertFloat(t, "pretax income", rows[0].PretaxIncomeB, 20)
+	assertFloat(t, "income tax", rows[0].IncomeTaxB, 4)
+	assertFloat(t, "stock compensation", rows[0].StockCompB, 1)
+	assertFloat(t, "inventory", rows[0].InventoryB, 30)
+	assertFloat(t, "receivables", rows[0].ReceivablesB, 20)
+	assertFloat(t, "payables", rows[0].PayablesB, 15)
 }
 
 func durationConcept(values ...fact) factConcept {
@@ -164,6 +178,12 @@ func TestExtractAnnualsUsesFirstAvailableFilingAndMergesMetrics(t *testing.T) {
 				"NetIncomeLoss": {Units: map[string][]fact{"USD": {
 					{Start: "2023-01-01", End: "2023-12-31", Val: 20e9, FP: "FY", Form: "10-K", Filed: "2024-02-01"},
 				}}},
+				"GrossProfit": {Units: map[string][]fact{"USD": {
+					{Start: "2023-01-01", End: "2023-12-31", Val: 45e9, FP: "FY", Form: "10-K", Filed: "2024-02-01"},
+				}}},
+				"ShareBasedCompensation": {Units: map[string][]fact{"USD": {
+					{Start: "2023-01-01", End: "2023-12-31", Val: 2e9, FP: "FY", Form: "10-K", Filed: "2024-02-01"},
+				}}},
 				"EarningsPerShareDiluted": {Units: map[string][]fact{"USD/shares": {
 					{Start: "2023-01-01", End: "2023-12-31", Val: 4.25, FP: "FY", Form: "10-K", Filed: "2024-02-01"},
 				}}},
@@ -186,6 +206,8 @@ func TestExtractAnnualsUsesFirstAvailableFilingAndMergesMetrics(t *testing.T) {
 	if rows[0].DilutedEPS == nil || *rows[0].DilutedEPS != 4.25 {
 		t.Fatalf("EPS missing: %#v", rows[0].DilutedEPS)
 	}
+	assertFloat(t, "annual gross profit", rows[0].GrossProfitB, 45)
+	assertFloat(t, "annual stock compensation", rows[0].StockCompB, 2)
 }
 
 func TestDecodeThetaRowsSupportsArrayAndEnvelope(t *testing.T) {

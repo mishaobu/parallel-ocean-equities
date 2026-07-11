@@ -14,7 +14,7 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`, w
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
 
-The landing view charts indexed market performance and all eight valuation measures on a shared timeline with synchronized macro panels. The comparison response omits quarterly filing arrays and reduces monthly prices to quarter-end snapshots. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and full monthly market history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
+The landing view charts indexed market performance, all eight valuation measures, and thirteen operating-quality measures on filing-date timelines with synchronized macro panels. Every equities time-series chart supports drag selection, period reset, legend filtering where multiple series are present, and selected-window y-axis fitting. Isolated extreme points are clipped from the fitted axis only when adjacent observations return to the normal range; the raw point remains available in the series. The comparison response omits quarterly filing arrays and reduces monthly prices to quarter-end snapshots. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and full monthly market history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
 
 ## Local run
 

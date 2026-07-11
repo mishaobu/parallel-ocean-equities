@@ -1,4 +1,5 @@
 import type { Equity, MacroPoint } from "./types";
+import type { QualityRow } from "./qualityData";
 import type { ValuationRow } from "./valuationData";
 
 export type HistoryBasis = "actual" | "forward";
@@ -21,6 +22,12 @@ export function historyDomain(equities: Equity[], macro: MacroPoint[], range: Hi
 export function valuationHistoryDomain(equities: Equity[], range: HistoryRange, now = new Date()): [number, number] {
   if (range !== "max") return historyDomain(equities, [], range, now);
   const dates = equities.flatMap((equity) => equity.valuations?.map((point) => Date.parse(point.date)) ?? []).filter(Number.isFinite);
+  return [dates.length ? Math.min(...dates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1), now.getTime()];
+}
+
+export function qualityHistoryDomain(equities: Equity[], range: HistoryRange, now = new Date()): [number, number] {
+  if (range !== "max") return historyDomain(equities, [], range, now);
+  const dates = equities.flatMap((equity) => equity.qualities?.map((point) => Date.parse(point.date)) ?? []).filter(Number.isFinite);
   return [dates.length ? Math.min(...dates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1), now.getTime()];
 }
 
@@ -48,6 +55,21 @@ export function valuationHistoryRows(equities: Equity[], metric: ValuationRow, b
     for (const point of equity.valuations ?? []) {
       const date = Date.parse(point.date);
       const value = point[key];
+      if (!Number.isFinite(date) || date < domain[0] || date > domain[1] || typeof value !== "number" || !Number.isFinite(value)) continue;
+      const row = rows.get(date) ?? { date };
+      row[equity.ticker] = value;
+      rows.set(date, row);
+    }
+  }
+  return [...rows.values()].sort((left, right) => left.date - right.date);
+}
+
+export function qualityHistoryRows(equities: Equity[], metric: QualityRow, domain: [number, number]) {
+  const rows = new Map<number, Record<string, number>>();
+  for (const equity of equities) {
+    for (const point of equity.qualities ?? []) {
+      const date = Date.parse(point.date);
+      const value = point[metric.property];
       if (!Number.isFinite(date) || date < domain[0] || date > domain[1] || typeof value !== "number" || !Number.isFinite(value)) continue;
       const row = rows.get(date) ?? { date };
       row[equity.ticker] = value;

@@ -1,4 +1,5 @@
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
 import { valuationHistoryRows, type HistoryBasis } from "../historyData";
 import { equityColor } from "../colors";
 import { descendingTooltipItem } from "../chartData";
@@ -26,20 +27,26 @@ export function ValuationHistoryCharts({ equities, metric, basis, domain }: Prop
 
 function ValuationHistoryChart({ equities, metric, basis, domain, compact = false }: { equities: Equity[]; metric: ValuationRow; basis: HistoryBasis; domain: [number, number]; compact?: boolean }) {
   const data = valuationHistoryRows(equities, metric, basis, domain);
+  const keys = equities.map((equity) => equity.ticker);
+  const legend = useLegendFilter(keys);
+  const chart = useChartZoom(domain, 20*24*60*60*1000);
+  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "yield" || metric.kind === "leverage" });
   return (
     <div className={`chart history-chart${compact ? " chart-compact" : " chart-primary"}`}>
       <div className="chart-heading">
         <strong>{metric.label}</strong>
-        <span>{basis === "actual" ? "LTM at filing" : "Next 12m realized"} / {metric.kind === "yield" ? "percent" : "multiple"}</span>
+        <ChartHeadingMeta unit={`${basis === "actual" ? "LTM at filing" : "Next 12m realized"} / ${metric.kind === "yield" ? "percent" : "multiple"}`} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} />
       </div>
       <div className="chart-canvas">
         {data.length === 0 ? <ChartEmpty /> : <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 14, right: 18, bottom: 2, left: compact ? -10 : 2 }}>
+          <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 18, bottom: 2, left: compact ? -10 : 2 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
             <CartesianGrid vertical={false} stroke="#e5e9e6" />
-            <XAxis dataKey="date" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={32} />
-            <YAxis tickFormatter={(value) => formatValuation(Number(value), metric.kind)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
+            <XAxis dataKey="date" type="number" scale="time" domain={chart.activeDomain} allowDataOverflow tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={32} />
+            <YAxis domain={fitted.domain} allowDataOverflow tickFormatter={(value) => formatValuation(Number(value), metric.kind)} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
             <Tooltip itemSorter={descendingTooltipItem} formatter={(value) => formatValuation(Number(value), metric.kind)} labelFormatter={(value) => dateLabel(Number(value))} />
-            {!compact && <Legend iconType="line" wrapperStyle={{ fontSize: 12 }} />}
+            {!compact && <Legend iconType="line" wrapperStyle={{ fontSize: 12, cursor: "pointer" }} onClick={(event) => legend.toggle(String(event.dataKey ?? ""))} />}
+            {(metric.kind === "yield" || metric.kind === "leverage") && <ReferenceLine y={0} stroke="#aeb8b1" strokeDasharray="3 3" />}
+            {chart.selection && <ReferenceArea x1={chart.selection[0]} x2={chart.selection[1]} fill="#7a9b88" fillOpacity={0.16} strokeOpacity={0} />}
             {equities.map((equity) => <Line
               key={equity.ticker}
               type="monotone"
@@ -50,6 +57,7 @@ function ValuationHistoryChart({ equities, metric, basis, domain, compact = fals
               dot={false}
               activeDot={{ r: 4 }}
               connectNulls
+              hide={legend.hidden.has(equity.ticker)}
               isAnimationActive={false}
             />)}
           </LineChart>

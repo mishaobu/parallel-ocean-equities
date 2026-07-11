@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, Calculator, GitCompareArrows, Landmark, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
-import { historyDomain, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
+import { historyDomain, qualityHistoryDomain, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
@@ -10,12 +10,15 @@ import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
 import { BalanceSheetChart, QuarterlyChart } from "./components/QuarterlyCharts";
 import { QuarterlyTable } from "./components/QuarterlyTable";
+import { QualityHistoryCharts } from "./components/QualityHistoryCharts";
+import { QualityMatrix } from "./components/QualityMatrix";
 import { TickerRail } from "./components/TickerRail";
 import { ValuationMatrix } from "./components/ValuationMatrix";
 import { ValuationHistoryCharts } from "./components/ValuationHistoryCharts";
 import { ValuationWorkbench } from "./components/ValuationWorkbench";
 import type { Equity, MacroSeries, MetricKey, StateResponse } from "./types";
 import { formatValuation, valuationRows, type ValuationMetricKey } from "./valuationData";
+import { qualityRows, type QualityMetricKey } from "./qualityData";
 
 const metrics: MetricKey[] = ["revenueB", "capexB", "netIncomeB", "dilutedEps", "peRatio"];
 type ViewMode = "compare" | "ticker" | "models";
@@ -158,6 +161,7 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
   const [basis, setBasis] = useState<HistoryBasis>("actual");
   const [range, setRange] = useState<HistoryRange>("max");
   const [valuationMetric, setValuationMetric] = useState<ValuationMetricKey>("pe");
+  const [qualityMetric, setQualityMetric] = useState<QualityMetricKey>("cash-conversion");
   const [universe, setUniverse] = useState<UniverseKey>("core");
   const activeUniverse = universes.find((candidate) => candidate.key === universe) ?? universes[0];
   const selectedEquities = useMemo(() => {
@@ -168,6 +172,7 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
   const fundamentalEquities = useMemo(() => selectedEquities.filter((equity) => equity.annuals.length > 0), [selectedEquities]);
   const domain = useMemo(() => historyDomain(selectedEquities, macro?.points ?? [], range), [macro?.points, range, selectedEquities]);
   const valuationDomain = useMemo(() => valuationHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
+  const qualityDomain = useMemo(() => qualityHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
   return (
     <section className="view">
       <div className="view-title compare-title"><div><h1>Market history</h1><span>{selectedEquities.length} instruments / {domainLabel(domain)}</span></div>
@@ -198,6 +203,13 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
       <MacroCharts macro={macro} domain={domain} />
       <div className="section-heading"><div><h2>Current valuation</h2><span>Sortable LTM and internal model snapshot</span></div></div>
       <ValuationMatrix equities={fundamentalEquities} />
+      <div className="section-heading"><div><h2>Operating quality</h2><span>Cash conversion, margins, working capital, returns and dilution</span></div></div>
+      <div className="metric-tabs quality-tabs" aria-label="Operating quality metric">
+        {qualityRows.map((row) => <button type="button" key={row.key} className={qualityMetric === row.key ? "is-active" : ""} onClick={() => setQualityMetric(row.key)}>{row.label}</button>)}
+      </div>
+      <QualityHistoryCharts equities={fundamentalEquities} metric={qualityMetric} domain={qualityDomain} />
+      <div className="section-heading compact-heading"><div><h2>Current operating quality</h2><span>Sortable trailing snapshot</span></div></div>
+      <QualityMatrix equities={fundamentalEquities} />
       <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
       <div className="metric-tabs annual-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => onMetric(key)}>{metricLabels[key]}</button>)}</div>
       <MetricChart equities={fundamentalEquities} metric={metric} />
@@ -237,6 +249,8 @@ function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; 
             <BalanceSheetChart equity={equity} />
           </div>
           <QuarterlyTable equity={equity} />
+          <div className="section-heading"><div><h2>Operating quality</h2><span>Trailing twelve months</span></div></div>
+          <QualityMatrix equities={[equity]} />
         </>}
         <div className="section-heading"><div><h2>Market and annual history</h2><span>{analysisDate(equity)}</span></div></div>
         <PriceChart equity={equity} />
