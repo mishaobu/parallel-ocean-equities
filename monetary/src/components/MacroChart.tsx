@@ -45,7 +45,7 @@ export function MacroChart({ title, note, points, domain, series, unit = "percen
 		</div>
 		{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" aria-label="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}
     </header>
-    <div className="chart-canvas">
+    <div className="chart-canvas chart-gesture-surface" {...range.touchHandlers}>
       {rows.length === 0 ? <div className="chart-empty">Series unavailable</div> : <ResponsiveContainer width="100%" height="100%">
 		<LineChart data={rows} margin={{ top: 15, right: hasRightAxis ? 5 : 20, bottom: 3, left: 0 }} onMouseDown={range.start} onMouseMove={(event) => { range.move(event); onInspect?.(eventDate(event)); }} onMouseUp={range.finish} onMouseLeave={() => { range.finish(); onInspect?.(); }}>
           <CartesianGrid vertical={false} stroke="#e4e8e5" />

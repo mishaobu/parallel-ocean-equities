@@ -97,6 +97,11 @@ button:disabled { opacity: .45; cursor: default; }
 .chart-heading-meta .icon-button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 1px solid #d2dad4; border-radius: 4px; background: #fff; cursor: pointer; }
 .chart-outlier-button { display: inline-flex; align-items: center; gap: 4px; min-height: 25px; padding: 3px 6px; border: 1px solid #d7c28f; border-radius: 4px; background: #fff9e9; color: #76571c; font-size: 9px; cursor: pointer; white-space: nowrap; }
 .interactive-chart { cursor: crosshair; user-select: none; }
+.chart-gesture-surface { touch-action: pan-y; }
+
+@media (pointer: coarse) {
+  .interactive-chart { cursor: default; }
+}
 .recharts-default-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px 9px; }
 .recharts-default-legend .recharts-legend-item { margin-right: 0 !important; }
 .chart-canvas { height: 342px; padding: 8px 6px 4px; }

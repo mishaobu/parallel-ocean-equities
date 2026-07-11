@@ -52,7 +52,7 @@ export function EquityTransmission({ equities, ticker, onTicker, points, domain,
 			<div className="overlay-switch" aria-label="Equity macro overlay">{(Object.keys(overlays) as Overlay[]).map((key) => <button type="button" key={key} className={overlay === key ? "is-active" : ""} onClick={() => setOverlay(key)}>{overlays[key].label}</button>)}</div>
 			{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" aria-label="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}
 		</header>
-      <div className="chart-canvas chart-wide"><ResponsiveContainer width="100%" height="100%">
+      <div className="chart-canvas chart-wide chart-gesture-surface" {...range.touchHandlers}><ResponsiveContainer width="100%" height="100%">
 		<LineChart data={rows} margin={{ top: 15, right: 5, bottom: 3, left: 0 }} onMouseDown={range.start} onMouseMove={(event) => { range.move(event); onInspect?.(eventDate(event)); }} onMouseUp={range.finish} onMouseLeave={() => { range.finish(); onInspect?.(); }}>
           <CartesianGrid vertical={false} stroke="#e4e8e5" />
           <XAxis dataKey="timestamp" type="number" scale="time" domain={domain} tickFormatter={yearLabel} tick={{ fill: "#69746d", fontSize: 10 }} minTickGap={38} axisLine={false} tickLine={false} />

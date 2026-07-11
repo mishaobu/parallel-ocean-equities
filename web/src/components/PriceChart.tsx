@@ -12,7 +12,7 @@ export function PriceChart({ equity }: { equity: Equity }) {
   return (
     <div className="chart chart-wide">
       <div className="chart-heading"><strong>Adjusted close</strong><ChartHeadingMeta unit="monthly" zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
-      <div className="chart-canvas">
+      <div className="chart-canvas chart-gesture-surface" {...chart.touchHandlers}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: 0 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
             <CartesianGrid vertical={false} stroke="#e5e9e6" />

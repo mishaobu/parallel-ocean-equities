@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fittedYDomain } from "./chartInteraction";
+import { fittedYDomain, touchDomainRange } from "./chartInteraction";
 
 describe("interactive chart domains", () => {
   it("fits the selected x-axis window", () => {
@@ -21,5 +21,19 @@ describe("interactive chart domains", () => {
     const result = fittedYDomain(rows, [0, 20], ["value"], "x", { log: true });
     expect(result.clipped).toBe(false);
     expect(Number(result.domain[1])).toBeGreaterThan(rows[19].value);
+  });
+});
+
+describe("touch chart gestures", () => {
+  it("maps two touches to an ordered range in the chart domain", () => {
+    expect(touchDomainRange([0, 100], [{ clientX: 175 }, { clientX: 125 }], { left: 100, width: 100 })).toEqual([25, 75]);
+  });
+
+  it("clamps touches to the plotted x-axis", () => {
+    expect(touchDomainRange([10, 20], [{ clientX: 50 }, { clientX: 250 }], { left: 100, width: 100 })).toEqual([10, 20]);
+  });
+
+  it("does not start a selection from one finger", () => {
+    expect(touchDomainRange([0, 100], [{ clientX: 150 }], { left: 100, width: 100 })).toBeUndefined();
   });
 });

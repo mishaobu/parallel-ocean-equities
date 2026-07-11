@@ -97,6 +97,10 @@ main { max-width: 1580px; margin: 0 auto; padding: 24px 26px 60px; }
 .chart-transform button { display: grid; place-items: center; min-width: 30px; height: 28px; padding: 0 4px; border: 0; background: transparent; color: #68746d; font-size: 8px; font-weight: 800; cursor: pointer; }
 .chart-transform button.is-active { background: #fff; color: #17201b; box-shadow: 0 1px 2px rgba(31, 48, 38, .12); }
 .chart-canvas { height: 290px; padding: 7px 5px 3px; }
+.chart-gesture-surface { touch-action: pan-y; cursor: crosshair; user-select: none; }
+@media (pointer: coarse) {
+  .chart-gesture-surface { cursor: default; }
+}
 .chart-primary .chart-canvas { height: 380px; }
 .analysis-grid > .chart-primary { grid-column: 1 / -1; }
 .analysis-grid > .chart-primary .chart-canvas { height: 390px; }
