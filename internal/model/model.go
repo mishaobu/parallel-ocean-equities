@@ -39,8 +39,9 @@ type AnnualPoint struct {
 }
 
 type PricePoint struct {
-	Date  string  `json:"date"`
-	Close float64 `json:"close"`
+	Date             string   `json:"date"`
+	Close            float64  `json:"close"`
+	TotalReturnClose *float64 `json:"totalReturnClose,omitempty"`
 }
 
 type QuarterlyPoint struct {
@@ -273,12 +274,31 @@ type OptionSnapshot struct {
 	Terms                 []OptionTermPoint `json:"terms,omitempty"`
 }
 
+type OptionHistoryPoint struct {
+	Ticker                string   `json:"ticker"`
+	Date                  string   `json:"date"`
+	Spot                  *float64 `json:"spot,omitempty"`
+	RealizedVolatility20D *float64 `json:"realizedVolatility20D,omitempty"`
+	ATMIV30D              *float64 `json:"atmIv30D,omitempty"`
+	Skew30D               *float64 `json:"skew30D,omitempty"`
+	ExpectedMove30D       *float64 `json:"expectedMove30D,omitempty"`
+	ImpliedRealizedSpread *float64 `json:"impliedRealizedSpread,omitempty"`
+}
+
+type OptionEvent struct {
+	Ticker string `json:"ticker"`
+	Date   string `json:"date"`
+	Label  string `json:"label"`
+}
+
 type OptionsSeries struct {
-	UpdatedAt time.Time        `json:"updatedAt,omitempty"`
-	AsOf      string           `json:"asOf,omitempty"`
-	Source    string           `json:"source,omitempty"`
-	Warnings  []string         `json:"warnings,omitempty"`
-	Snapshots []OptionSnapshot `json:"snapshots,omitempty"`
+	UpdatedAt time.Time            `json:"updatedAt,omitempty"`
+	AsOf      string               `json:"asOf,omitempty"`
+	Source    string               `json:"source,omitempty"`
+	Warnings  []string             `json:"warnings,omitempty"`
+	Snapshots []OptionSnapshot     `json:"snapshots,omitempty"`
+	History   []OptionHistoryPoint `json:"history,omitempty"`
+	Events    []OptionEvent        `json:"events,omitempty"`
 }
 
 type CountryPoint struct {

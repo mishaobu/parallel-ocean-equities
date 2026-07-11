@@ -1,5 +1,5 @@
 import { Area, AreaChart, CartesianGrid, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain } from "../chartInteraction";
 import type { Equity } from "../types";
 
 export function PriceChart({ equity }: { equity: Equity }) {
@@ -7,11 +7,11 @@ export function PriceChart({ equity }: { equity: Equity }) {
   const timestamps = data.map((row) => row.timestamp);
   const domain: [number, number] = [Math.min(...timestamps, Date.now()), Math.max(...timestamps, Date.now())];
   const chart = useChartZoom(domain, 20*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, ["close"], "timestamp");
+  const fitted = useFittedYDomain(data, chart.activeDomain, ["close"], "timestamp");
   if (!data.length) return null;
   return (
     <div className="chart chart-wide">
-      <div className="chart-heading"><strong>Adjusted close</strong><ChartHeadingMeta unit="monthly" zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+      <div className="chart-heading"><strong>Adjusted close</strong><ChartHeadingMeta unit="monthly" zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
       <div className="chart-canvas">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: 0 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>

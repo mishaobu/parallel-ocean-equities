@@ -17,7 +17,7 @@ func TestYahooMarketDecodesMonthlyClosesAtMonthEnd(t *testing.T) {
 		if r.URL.Query().Get("interval") != "1mo" || r.Header.Get("User-Agent") != "parallel-ocean-equities/1.0" {
 			t.Fatalf("unexpected request: %s user-agent=%s", r.URL.String(), r.Header.Get("User-Agent"))
 		}
-		fmt.Fprint(w, `{"chart":{"result":[{"timestamp":[1704067200,1706745600,1709251200],"indicators":{"quote":[{"close":[100,null,120]}]}}],"error":null}}`)
+		fmt.Fprint(w, `{"chart":{"result":[{"timestamp":[1704067200,1706745600,1709251200],"indicators":{"quote":[{"close":[100,null,120]}],"adjclose":[{"adjclose":[90,null,115]}]}}],"error":null}}`)
 	}))
 	defer server.Close()
 	provider := NewYahooMarket(server.Client())
@@ -27,11 +27,14 @@ func TestYahooMarketDecodesMonthlyClosesAtMonthEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "Yahoo Finance monthly closes" || len(prices) != 2 {
+	if source != "Yahoo Finance monthly close and adjusted close" || len(prices) != 2 {
 		t.Fatalf("source=%q prices=%v", source, prices)
 	}
 	if prices[0].Date != "2024-01-31" || prices[1].Date != "2024-03-01" {
 		t.Fatalf("unexpected normalized dates: %v", prices)
+	}
+	if prices[0].TotalReturnClose == nil || *prices[0].TotalReturnClose != 90 || prices[1].TotalReturnClose == nil || *prices[1].TotalReturnClose != 115 {
+		t.Fatalf("adjusted closes missing: %v", prices)
 	}
 }
 

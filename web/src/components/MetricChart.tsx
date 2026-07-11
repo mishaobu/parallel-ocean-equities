@@ -1,29 +1,31 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter, type SharedChartRange, type SharedLegendFilter } from "../chartInteraction";
 import { comparisonRows, descendingTooltipItem, formatMetric, metricLabels } from "../chartData";
 import { equityColor } from "../colors";
 import type { Equity, MetricKey } from "../types";
 
-interface Props {
+interface Props extends SharedChartRange, SharedLegendFilter {
   equities: Equity[];
   metric: MetricKey;
   compact?: boolean;
 }
 
-export function MetricChart({ equities, metric, compact = false }: Props) {
+export function MetricChart({ equities, metric, compact = false, zoom, onZoom, hiddenKeys, onHiddenKeys }: Props) {
   const data = comparisonRows(equities, metric);
   const estimateYear = data.find((row) => row.estimate)?.year as number | undefined;
   const years = data.map((row) => Number(row.year)).filter(Number.isFinite);
   const domain: [number, number] = [Math.min(...years, new Date().getUTCFullYear()-10), Math.max(...years, new Date().getUTCFullYear())];
   const keys = equities.map((equity) => equity.ticker);
-  const legend = useLegendFilter(keys);
-  const chart = useChartZoom(domain, 1);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "year", { includeZero: metric !== "peRatio" });
+  const legend = useLegendFilter(keys, hiddenKeys, onHiddenKeys);
+  const yearZoom: [number, number] | undefined = zoom ? [new Date(zoom[0]).getUTCFullYear(), new Date(zoom[1]).getUTCFullYear()] : undefined;
+  const updateYearZoom = onZoom ? (next?: [number, number]) => onZoom(next ? [Date.UTC(Math.round(next[0]), 0, 1), Date.UTC(Math.round(next[1]), 11, 31)] : undefined) : undefined;
+  const chart = useChartZoom(domain, 1, yearZoom, updateYearZoom);
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "year", { includeZero: metric !== "peRatio" });
   return (
     <div className={compact ? "chart chart-compact" : "chart"}>
       <div className="chart-heading">
         <strong>{metricLabels[metric]}</strong>
-        <ChartHeadingMeta unit={metric === "dilutedEps" ? "USD / share" : metric === "peRatio" ? "multiple" : "USD billions"} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} mode="year" />
+        <ChartHeadingMeta unit={metric === "dilutedEps" ? "USD / share" : metric === "peRatio" ? "multiple" : "USD billions"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} mode="year" />
       </div>
       <div className="chart-canvas">
         <ResponsiveContainer width="100%" height="100%">

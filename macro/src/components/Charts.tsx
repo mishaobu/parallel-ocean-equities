@@ -1,21 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import type { Snapshot } from "../data";
 
 export interface LineSpec { key: string; label: string; color: string; axis?: "left" | "right" }
-export function SeriesChart({ title, note, rows, domain, series, unit = "percent", primary = false }: { title: string; note: string; rows: Array<Record<string, string | number>>; domain: [number, number]; series: LineSpec[]; unit?: "percent" | "index"; primary?: boolean }) {
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [zoom, setZoom] = useState<[number, number]>();
-  const [selection, setSelection] = useState<[number, number]>();
-  const selectionRef = useRef<[number, number]>();
-  const activeDomain = zoom ?? domain;
+export interface RangeInteraction { rangeSelected?: boolean; onSelectDomain?: (domain: [number, number]) => void; onResetDomain?: () => void }
+export function SeriesChart({ title, note, rows, domain, series, unit = "percent", primary = false, rangeSelected, onSelectDomain, onResetDomain }: { title: string; note: string; rows: Array<Record<string, string | number>>; domain: [number, number]; series: LineSpec[]; unit?: "percent" | "index"; primary?: boolean } & RangeInteraction) {
+	const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+	const [selection, setSelection] = useState<[number, number]>();
+	const selectionRef = useRef<[number, number]>();
+	const activeDomain = domain;
   const hasRight = series.some((item) => item.axis === "right");
   const hasData = rows.some((row) => series.some((item) => typeof row[item.key] === "number"));
   const visible = series.filter((item) => !hidden.has(item.key));
   const leftDomain = useMemo(() => fittedYDomain(rows, activeDomain, visible.filter((item) => item.axis !== "right").map((item) => item.key)), [activeDomain, rows, visible]);
   const rightDomain = useMemo(() => fittedYDomain(rows, activeDomain, visible.filter((item) => item.axis === "right").map((item) => item.key)), [activeDomain, rows, visible]);
-  useEffect(() => { setZoom(undefined); setSelection(undefined); selectionRef.current = undefined; }, [domain[0], domain[1]]);
 
   function startRegion(event: ChartPointer) { const value = eventTimestamp(event); if (value !== undefined) { selectionRef.current = [value, value]; setSelection(selectionRef.current); } }
   function moveRegion(event: ChartPointer) { const value = eventTimestamp(event); if (value !== undefined && selectionRef.current) { selectionRef.current = [selectionRef.current[0], value]; setSelection(selectionRef.current); } }
@@ -23,12 +22,12 @@ export function SeriesChart({ title, note, rows, domain, series, unit = "percent
     const current = selectionRef.current;
     if (!current) return;
     const next: [number, number] = current[0] <= current[1] ? current : [current[1], current[0]];
-    if (next[1] - next[0] >= 20 * 24 * 60 * 60 * 1000) setZoom([Math.max(domain[0], next[0]), Math.min(domain[1], next[1])]);
+		if (next[1] - next[0] >= 20 * 24 * 60 * 60 * 1000) onSelectDomain?.([Math.max(domain[0], next[0]), Math.min(domain[1], next[1])]);
     selectionRef.current = undefined;
     setSelection(undefined);
   }
 
-  const aside = <div className="chart-region-control"><span>{zoom ? `${shortDate(zoom[0])} - ${shortDate(zoom[1])}` : "Drag plot to fit period"}</span>{zoom && <button type="button" className="icon-button" title="Reset chart period" onClick={() => setZoom(undefined)}><RotateCcw size={13} /></button>}</div>;
+	const aside = <div className="chart-region-control"><span>{rangeSelected ? `${shortDate(domain[0])} - ${shortDate(domain[1])}` : "Drag plot to fit period"}</span>{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}</div>;
   return <article className={`panel chart-panel series-chart-panel${primary ? " chart-primary" : ""}`}><PanelHeader title={title} note={note} aside={aside} /><div className="chart-body">
     {!hasData ? <div className="chart-empty">Series unavailable for selected range</div> : <ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 16, right: 6, bottom: 3, left: 0 }} onMouseDown={startRegion} onMouseMove={moveRegion} onMouseUp={finishRegion} onMouseLeave={finishRegion}>
       <CartesianGrid vertical={false} stroke="#e2e7e3" />
@@ -50,7 +49,7 @@ export function DivergenceMap({ rows }: { rows: Snapshot[] }) {
     {points.length === 0 ? <div className="chart-empty">Comparable observations unavailable</div> : <ResponsiveContainer width="100%" height="100%"><ScatterChart margin={{ top: 17, right: 18, bottom: 10, left: 0 }}>
       <CartesianGrid stroke="#e2e7e3" /><XAxis type="number" dataKey="realRate" name="Real rate" unit="%" tick={{ fill: "#68746d", fontSize: 10 }} /><YAxis type="number" dataKey="growth" name="Industrial growth" unit="%" tick={{ fill: "#68746d", fontSize: 10 }} width={48} /><ZAxis type="number" dataKey="inflation" range={[90, 270]} />
       <ReferenceLine x={0} stroke="#aab5ad" /><ReferenceLine y={0} stroke="#aab5ad" /><Tooltip cursor={{ strokeDasharray: "3 3" }} formatter={(value, name) => [`${Number(value).toFixed(2)}%`, name]} labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ""} contentStyle={{ border: "1px solid #c9d2cb", borderRadius: 3, fontSize: 11 }} />
-      <Scatter data={points} fill="#347b57" isAnimationActive={false}>{points.map((point) => <Cell key={point.code} fill={point.realRate >= 0 ? "#3975a7" : "#b8493e"} />)}</Scatter>
+      <Scatter data={points} fill="#347b57" isAnimationActive={false}>{points.map((point) => <Cell key={point.code} fill={point.realRate >= 0 ? "#3975a7" : "#b8493e"} />)}<LabelList dataKey="code" position="top" offset={7} fill="#263c30" fontSize={10} fontWeight={700} /></Scatter>
     </ScatterChart></ResponsiveContainer>}
   </div></article>;
 }

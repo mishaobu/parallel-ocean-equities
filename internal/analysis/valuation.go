@@ -15,20 +15,28 @@ func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
 	}
 	sort.Slice(prices, func(i, j int) bool { return prices[i].Date < prices[j].Date })
 	quarters := equity.Quarterlies
-	quarterlyPoints := make([]model.ValuationPoint, 0, len(quarters))
+	quarterlyByDate := make(map[string]model.ValuationPoint, len(quarters))
 	for index := 3; index < len(quarters); index++ {
+		trailing := quarters[index-3 : index+1]
+		if !consecutiveQuarterWindow(trailing) {
+			continue
+		}
 		date := availableDate(quarters[index].FiledAt, quarters[index].PeriodEnd)
 		price, ok := priceOnOrBefore(prices, date)
 		if !ok || price <= 0 {
 			continue
 		}
-		trailing := quarters[index-3 : index+1]
 		var forward []model.QuarterlyPoint
-		if index+4 < len(quarters) {
+		if index+4 < len(quarters) && consecutiveQuarterWindow(quarters[index+1:index+5]) {
 			forward = quarters[index+1 : index+5]
 		}
-		quarterlyPoints = append(quarterlyPoints, historicalValuationPoint(date, price, trailing, forward))
+		quarterlyByDate[date] = historicalValuationPoint(date, price, trailing, forward)
 	}
+	quarterlyPoints := make([]model.ValuationPoint, 0, len(quarterlyByDate))
+	for _, point := range quarterlyByDate {
+		quarterlyPoints = append(quarterlyPoints, point)
+	}
+	sort.Slice(quarterlyPoints, func(i, j int) bool { return quarterlyPoints[i].Date < quarterlyPoints[j].Date })
 
 	firstQuarterlyDate := ""
 	if len(quarterlyPoints) > 0 {

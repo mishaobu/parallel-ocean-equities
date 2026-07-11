@@ -1,5 +1,5 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter, type SharedChartRange } from "../chartInteraction";
 import { macroHistoryRows } from "../historyData";
 import { descendingTooltipItem } from "../chartData";
 import type { MacroPoint, MacroSeries } from "../types";
@@ -49,23 +49,23 @@ const panels: { title: string; unit: Unit; zero?: boolean; lines: { key: MacroKe
   },
 ];
 
-export function MacroCharts({ macro, domain }: { macro?: MacroSeries; domain: [number, number] }) {
+export function MacroCharts({ macro, domain, zoom, onZoom }: { macro?: MacroSeries; domain: [number, number] } & SharedChartRange) {
   const data = macroHistoryRows(macro?.points ?? [], domain);
   if (data.length === 0) {
     return <div className="chart macro-empty"><div className="chart-empty">Macro history refresh pending{macro?.error ? `: ${macro.error}` : ""}</div></div>;
   }
   return <div className="macro-grid">
-    {panels.map((panel) => <MacroChart key={panel.title} panel={panel} data={data} domain={domain} />)}
+    {panels.map((panel) => <MacroChart key={panel.title} panel={panel} data={data} domain={domain} zoom={zoom} onZoom={onZoom} />)}
   </div>;
 }
 
-function MacroChart({ panel, data, domain }: { panel: typeof panels[number]; data: ReturnType<typeof macroHistoryRows>; domain: [number, number] }) {
+function MacroChart({ panel, data, domain, zoom, onZoom }: { panel: typeof panels[number]; data: ReturnType<typeof macroHistoryRows>; domain: [number, number] } & SharedChartRange) {
   const keys = panel.lines.map((line) => line.key);
   const legend = useLegendFilter(keys);
-  const chart = useChartZoom(domain, 20*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: panel.zero });
+  const chart = useChartZoom(domain, 20*24*60*60*1000, zoom, onZoom);
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: panel.zero });
   return <div className="chart chart-compact macro-chart">
-    <div className="chart-heading"><strong>{panel.title}</strong><ChartHeadingMeta unit={panel.unit === "log" ? "log10 / USD billions" : "percent"} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+    <div className="chart-heading"><strong>{panel.title}</strong><ChartHeadingMeta unit={panel.unit === "log" ? "log10 / USD billions" : "percent"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
     <div className="chart-canvas"><ResponsiveContainer width="100%" height="100%">
       <LineChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: -6 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
         <CartesianGrid vertical={false} stroke="#e5e9e6" />

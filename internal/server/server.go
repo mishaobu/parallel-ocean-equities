@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ type EquityService interface {
 	Snapshot() model.State
 	Stats() analysis.Stats
 	AddTicker(string) error
+	PreviewTicker(context.Context, string) (analysis.TickerPreview, error)
 	DeleteTicker(string) error
 	Queue(string) bool
 	RefreshAll() int
@@ -85,6 +88,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /internal/refresh", s.handleInternalRefresh)
 	s.mux.HandleFunc("GET "+base+"/api/state", s.handleState)
 	s.mux.HandleFunc("POST "+base+"/api/tickers", s.handleAddTicker)
+	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}/preview", s.handlePreviewTicker)
 	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}", s.handleTicker)
 	s.mux.HandleFunc("DELETE "+base+"/api/tickers/{ticker}", s.handleDeleteTicker)
 	s.mux.HandleFunc("POST "+base+"/api/tickers/{ticker}/refresh", s.handleRefreshTicker)
@@ -115,6 +119,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleRoot)
 }
 
+func (s *Server) handlePreviewTicker(w http.ResponseWriter, r *http.Request) {
+	preview, err := s.service.PreviewTicker(r.Context(), r.PathValue("ticker"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	writeJSON(w, http.StatusOK, preview)
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	state := s.service.Snapshot()
 	ready := len(state.Tickers) > 0
@@ -129,21 +143,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	state := s.service.Snapshot()
 	for _, equity := range state.Tickers {
 		equity.Quarterlies = nil
 		equity.Prices = compactPrices(equity.Prices)
 	}
 	state.Macro = compactMacro(state.Macro)
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeCachedJSON(w, r, map[string]any{
 		"state":   state,
 		"runtime": s.service.Stats(),
 	})
 }
 
-func (s *Server) handleMonetaryState(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleMonetaryState(w http.ResponseWriter, r *http.Request) {
 	type monetaryEquity struct {
 		Ticker     string                 `json:"ticker"`
 		Company    string                 `json:"company,omitempty"`
@@ -157,8 +170,7 @@ func (s *Server) handleMonetaryState(w http.ResponseWriter, _ *http.Request) {
 	}
 	macro := state.Macro
 	macro.Assets = nil
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeCachedJSON(w, r, map[string]any{
 		"state": map[string]any{
 			"version":   state.Version,
 			"updatedAt": state.UpdatedAt,
@@ -169,17 +181,61 @@ func (s *Server) handleMonetaryState(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (s *Server) handleMacroState(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleMacroState(w http.ResponseWriter, r *http.Request) {
 	state := s.service.Snapshot()
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{
+	state.Macro.Options.Events = optionEvents(state.Tickers)
+	macro := state.Macro
+	switch r.URL.Query().Get("view") {
+	case "countries", "relative":
+		macro.Points = nil
+		macro.Assets = nil
+		macro.Vintages = model.VintageSeries{}
+		macro.Options = model.OptionsSeries{}
+	case "assets", "overview":
+		macro.Points = nil
+		macro.Vintages = model.VintageSeries{}
+		macro.Options = model.OptionsSeries{}
+	case "options":
+		macro.Points = nil
+		macro.Assets = nil
+		macro.Vintages = model.VintageSeries{}
+	case "outcomes":
+		macro.Points = nil
+		macro.Options = model.OptionsSeries{}
+	case "scenarios":
+		macro.Vintages = model.VintageSeries{}
+		macro.Options = model.OptionsSeries{}
+	}
+	writeCachedJSON(w, r, map[string]any{
 		"state": map[string]any{
 			"version":   state.Version,
 			"updatedAt": state.UpdatedAt,
-			"macro":     state.Macro,
+			"macro":     macro,
 		},
 		"runtime": s.service.Stats(),
 	})
+}
+
+func optionEvents(equities map[string]*model.Equity) []model.OptionEvent {
+	rows := make([]model.OptionEvent, 0)
+	for ticker, equity := range equities {
+		seen := make(map[string]bool)
+		for _, quarter := range equity.Quarterlies {
+			if quarter.FiledAt == "" || seen[quarter.FiledAt] {
+				continue
+			}
+			seen[quarter.FiledAt] = true
+			label := quarter.Form
+			if label == "" {
+				label = "SEC filing"
+			}
+			rows = append(rows, model.OptionEvent{Ticker: ticker, Date: quarter.FiledAt, Label: label})
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Date < rows[j].Date || rows[i].Date == rows[j].Date && rows[i].Ticker < rows[j].Ticker
+	})
+	return rows
 }
 
 func compactPrices(rows []model.PricePoint) []model.PricePoint {
@@ -238,8 +294,7 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ticker not found")
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, equity)
+	writeCachedJSON(w, r, equity)
 }
 
 func (s *Server) handleAddTicker(w http.ResponseWriter, r *http.Request) {
@@ -387,6 +442,24 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeCachedJSON(w http.ResponseWriter, r *http.Request, value any) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encode response")
+		return
+	}
+	etag := fmt.Sprintf("\"%x\"", sha256.Sum256(body))
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

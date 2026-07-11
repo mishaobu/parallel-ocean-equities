@@ -1,29 +1,24 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter, type SharedChartRange, type SharedLegendFilter } from "../chartInteraction";
 import { descendingTooltipItem } from "../chartData";
 import { equityColor } from "../colors";
 import { qualityHistoryRows } from "../historyData";
 import { formatQuality, qualityRows, type QualityMetricKey, type QualityRow } from "../qualityData";
 import type { Equity } from "../types";
 
-export function QualityHistoryCharts({ equities, metric, domain }: { equities: Equity[]; metric: QualityMetricKey; domain: [number, number] }) {
+export function QualityHistoryCharts({ equities, metric, domain, zoom, onZoom, hiddenKeys, onHiddenKeys }: { equities: Equity[]; metric: QualityMetricKey; domain: [number, number] } & SharedChartRange & SharedLegendFilter) {
   const primary = qualityRows.find((row) => row.key === metric) ?? qualityRows[0];
-  return <>
-    <QualityHistoryChart equities={equities} metric={primary} domain={domain} />
-    <div className="small-multiples quality-grid">
-      {qualityRows.filter((row) => row.key !== primary.key).map((row) => <QualityHistoryChart key={row.key} equities={equities} metric={row} domain={domain} compact />)}
-    </div>
-  </>;
+  return <QualityHistoryChart equities={equities} metric={primary} domain={domain} zoom={zoom} onZoom={onZoom} hiddenKeys={hiddenKeys} onHiddenKeys={onHiddenKeys} />;
 }
 
-function QualityHistoryChart({ equities, metric, domain, compact = false }: { equities: Equity[]; metric: QualityRow; domain: [number, number]; compact?: boolean }) {
+function QualityHistoryChart({ equities, metric, domain, compact = false, zoom, onZoom, hiddenKeys, onHiddenKeys }: { equities: Equity[]; metric: QualityRow; domain: [number, number]; compact?: boolean } & SharedChartRange & SharedLegendFilter) {
   const data = qualityHistoryRows(equities, metric, domain);
   const keys = equities.map((equity) => equity.ticker);
-  const legend = useLegendFilter(keys);
-  const chart = useChartZoom(domain, 20*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "percent" });
+  const legend = useLegendFilter(keys, hiddenKeys, onHiddenKeys);
+  const chart = useChartZoom(domain, 20*24*60*60*1000, zoom, onZoom);
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "percent" });
   return <div className={`chart history-chart${compact ? " chart-compact" : " chart-primary"}`}>
-    <div className="chart-heading"><strong>{metric.label}</strong><ChartHeadingMeta unit={metric.kind === "percent" ? "LTM / percent" : metric.kind === "days" ? "LTM / days" : "LTM / multiple"} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+    <div className="chart-heading"><strong>{metric.label}</strong><ChartHeadingMeta unit={metric.kind === "percent" ? "LTM / percent" : metric.kind === "days" ? "LTM / days" : "LTM / multiple"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
     <div className="chart-canvas">{data.length === 0 ? <div className="chart-empty">Operating-quality history unavailable</div> : <ResponsiveContainer width="100%" height="100%">
       <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 18, bottom: 2, left: compact ? -10 : 2 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
         <CartesianGrid vertical={false} stroke="#e5e9e6" />

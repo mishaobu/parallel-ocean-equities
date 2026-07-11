@@ -11,12 +11,13 @@ export function historyDomain(equities: Equity[], macro: MacroPoint[], range: Hi
     const years = range === "25y" ? 25 : range === "15y" ? 15 : 10;
     return [Date.UTC(now.getUTCFullYear() - years, now.getUTCMonth(), 1), end];
   }
-  const marketDates = [
-    ...equities.flatMap((equity) => equity.valuations?.map((point) => point.date) ?? []),
-    ...equities.flatMap((equity) => equity.prices?.map((point) => point.date) ?? []),
-  ].map(Date.parse).filter(Number.isFinite);
-  const dates = marketDates.length ? marketDates : macro.map((point) => Date.parse(point.date)).filter(Number.isFinite);
-  return [dates.length ? Math.min(...dates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1), end];
+	const firstMarketDates = equities.flatMap((equity) => {
+		const first = equity.prices?.map((point) => Date.parse(point.date)).filter(Number.isFinite).sort((a, b) => a - b)[0];
+		return first === undefined ? [] : [first];
+	});
+	const macroDates = macro.map((point) => Date.parse(point.date)).filter(Number.isFinite);
+	const start = firstMarketDates.length ? Math.max(...firstMarketDates) : macroDates.length ? Math.min(...macroDates) : Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), 1);
+	return [start, end];
 }
 
 export function valuationHistoryDomain(equities: Equity[], range: HistoryRange, now = new Date()): [number, number] {
@@ -32,20 +33,30 @@ export function qualityHistoryDomain(equities: Equity[], range: HistoryRange, no
 }
 
 export function indexedPerformanceRows(equities: Equity[], domain: [number, number]) {
-  const rows = new Map<number, Record<string, number>>();
-  for (const equity of equities) {
-    const prices = (equity.prices ?? []).map((point) => ({ ...point, timestamp: Date.parse(point.date) }))
-      .filter((point) => Number.isFinite(point.timestamp) && point.timestamp >= domain[0] && point.timestamp <= domain[1] && point.close > 0)
-      .sort((left, right) => left.timestamp - right.timestamp);
-    const base = prices[0]?.close;
-    if (!base) continue;
-    for (const point of prices) {
-      const row = rows.get(point.timestamp) ?? { date: point.timestamp };
-      row[equity.ticker] = point.close / base;
+	const series = equities.map((equity) => ({
+		equity,
+		prices: (equity.prices ?? []).map((point) => ({ ...point, timestamp: Date.parse(point.date) }))
+			.filter((point) => Number.isFinite(point.timestamp) && point.timestamp >= domain[0] && point.timestamp <= domain[1] && returnValue(point) > 0)
+			.sort((left, right) => left.timestamp - right.timestamp),
+	})).filter((item) => item.prices.length > 0);
+	if (!series.length) return [];
+	const commonStart = Math.max(...series.map((item) => item.prices[0].timestamp));
+	const rows = new Map<number, Record<string, number>>();
+	for (const { equity, prices: allPrices } of series) {
+		const prices = allPrices.filter((point) => point.timestamp >= commonStart);
+		const base = prices[0] ? returnValue(prices[0]) : undefined;
+		if (!base) continue;
+		for (const point of prices) {
+			const row = rows.get(point.timestamp) ?? { date: point.timestamp };
+			row[equity.ticker] = returnValue(point) / base;
       rows.set(point.timestamp, row);
     }
   }
   return [...rows.values()].sort((left, right) => left.date - right.date);
+}
+
+export function returnValue(point: { close: number; totalReturnClose?: number }) {
+	return point.totalReturnClose && point.totalReturnClose > 0 ? point.totalReturnClose : point.close;
 }
 
 export function valuationHistoryRows(equities: Equity[], metric: ValuationRow, basis: HistoryBasis, domain: [number, number]) {

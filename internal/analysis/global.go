@@ -101,9 +101,13 @@ func buildUSCountry(points []model.MacroPoint) model.CountrySeries {
 		row.FXDate = dateIfValue(point.Date, row.FX)
 		rows = append(rows, row)
 	}
+	sources := make([]string, 0, len(fredSeriesIDs))
+	for _, id := range fredSeriesIDs {
+		sources = append(sources, "FRED:"+id)
+	}
 	return model.CountrySeries{
 		Code: "US", Name: "United States", Currency: "USD", Region: "Americas", PolicyLabel: "Federal funds rate",
-		FXLabel: "Broad USD index", EquityTicker: "SPY", Sources: []string{"FRED:US macro series"}, Points: rows,
+		FXLabel: "Broad USD index", EquityTicker: "SPY", Sources: sources, Points: rows,
 	}
 }
 

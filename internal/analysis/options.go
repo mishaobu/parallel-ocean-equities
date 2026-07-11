@@ -123,6 +123,7 @@ func (t *ThetaOptionsClient) Analyze(ctx context.Context, previous model.Options
 		return model.OptionsSeries{}, errors.New("ThetaData options refresh produced no fresh snapshots")
 	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Ticker < snapshots[j].Ticker })
+	history := mergeOptionHistory(previous.History, snapshots)
 	sort.Strings(warnings)
 	return model.OptionsSeries{
 		UpdatedAt: now,
@@ -130,7 +131,34 @@ func (t *ThetaOptionsClient) Analyze(ctx context.Context, previous model.Options
 		Source:    "ThetaData v3 option IV history and stock EOD",
 		Warnings:  warnings,
 		Snapshots: snapshots,
+		History:   history,
 	}, nil
+}
+
+func mergeOptionHistory(previous []model.OptionHistoryPoint, snapshots []model.OptionSnapshot) []model.OptionHistoryPoint {
+	byKey := make(map[string]model.OptionHistoryPoint, len(previous)+len(snapshots))
+	for _, point := range previous {
+		if point.Ticker != "" && point.Date != "" {
+			byKey[point.Ticker+"|"+point.Date] = point
+		}
+	}
+	for _, snapshot := range snapshots {
+		if snapshot.Ticker == "" || snapshot.AsOf == "" {
+			continue
+		}
+		byKey[snapshot.Ticker+"|"+snapshot.AsOf] = model.OptionHistoryPoint{Ticker: snapshot.Ticker, Date: snapshot.AsOf, Spot: snapshot.Spot, RealizedVolatility20D: snapshot.RealizedVolatility20D, ATMIV30D: snapshot.ATMIV30D, Skew30D: snapshot.Skew30D, ExpectedMove30D: snapshot.ExpectedMove30D, ImpliedRealizedSpread: snapshot.ImpliedRealizedSpread}
+	}
+	rows := make([]model.OptionHistoryPoint, 0, len(byKey))
+	for _, point := range byKey {
+		rows = append(rows, point)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Date < rows[j].Date || rows[i].Date == rows[j].Date && rows[i].Ticker < rows[j].Ticker
+	})
+	if len(rows) > 2080 {
+		rows = rows[len(rows)-2080:]
+	}
+	return rows
 }
 
 func isConservativeUSMarketWindow(now time.Time) bool {

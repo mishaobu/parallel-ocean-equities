@@ -11,7 +11,7 @@ describe("countrySnapshots", () => {
   it("keeps each metric's own observation date and age", () => {
     const rows = countrySnapshots(countries);
     expect(rows[1].values.inflation).toEqual({ value: 2, date: "2025-01-01", ageMonths: 12 });
-    expect(rows[1].asOf).toBe("2026-01-01");
+		expect(rows[1].asOf).toBe("2025-01-01");
   });
 
   it("sorts missing values last in either direction", () => {

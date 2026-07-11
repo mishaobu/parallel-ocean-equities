@@ -87,15 +87,17 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 	inventory := instantQuarterFacts(gaap, inventoryTags, "USD")
 	receivables := instantQuarterFacts(gaap, receivableTags, "USD")
 	payables := instantQuarterFacts(gaap, payableTags, "USD")
+	fiscalYearEndMonth := inferFiscalYearEndMonth(gaap)
 
 	rows := make([]model.QuarterlyPoint, 0, len(anchors))
 	for periodEnd, anchor := range anchors {
-		if anchor.fiscalYear == 0 || anchor.fiscalQuarter == "" {
+		fiscalYear, fiscalQuarter := fiscalPeriodForEnd(periodEnd, fiscalYearEndMonth)
+		if fiscalYear == 0 || fiscalQuarter == "" {
 			continue
 		}
 		row := model.QuarterlyPoint{
-			FiscalYear:    anchor.fiscalYear,
-			FiscalQuarter: anchor.fiscalQuarter,
+			FiscalYear:    fiscalYear,
+			FiscalQuarter: fiscalQuarter,
 			PeriodEnd:     periodEnd,
 			FiledAt:       anchor.filed,
 			Accession:     anchor.accession,
@@ -163,6 +165,76 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 		return rows[i].PeriodEnd < rows[j].PeriodEnd
 	})
 	return rows, nil
+}
+
+func inferFiscalYearEndMonth(gaap map[string]factConcept) time.Month {
+	counts := make(map[time.Month]int)
+	tags := append(append([]string{}, revenueTags...), netIncomeTags...)
+	for _, tag := range tags {
+		concept, ok := gaap[tag]
+		if !ok {
+			continue
+		}
+		for _, candidate := range concept.Units["USD"] {
+			if candidate.Form != "10-K" || candidate.FP != "FY" || candidate.Start == "" || candidate.End == "" {
+				continue
+			}
+			start, startErr := time.Parse("2006-01-02", candidate.Start)
+			end, endErr := time.Parse("2006-01-02", candidate.End)
+			if startErr != nil || endErr != nil {
+				continue
+			}
+			days := int(end.Sub(start).Hours() / 24)
+			if days >= 300 && days <= 390 {
+				counts[end.Month()]++
+			}
+		}
+	}
+	bestMonth, bestCount := time.December, 0
+	for month, count := range counts {
+		if count > bestCount {
+			bestMonth, bestCount = month, count
+		}
+	}
+	return bestMonth
+}
+
+func fiscalPeriodForEnd(periodEnd string, fiscalYearEndMonth time.Month) (int, string) {
+	date, err := time.Parse("2006-01-02", periodEnd)
+	if err != nil {
+		return 0, ""
+	}
+	monthsAfterYearEnd := (int(date.Month()) - int(fiscalYearEndMonth) + 12) % 12
+	quarterByDistance := []string{"Q4", "Q4", "Q1", "Q1", "Q1", "Q2", "Q2", "Q2", "Q3", "Q3", "Q3", "Q4"}
+	fiscalQuarter := quarterByDistance[monthsAfterYearEnd]
+	fiscalYear := date.Year()
+	// A 52/53-week fiscal year can close in the adjacent calendar month.
+	if int(date.Month())-int(fiscalYearEndMonth) > 1 {
+		fiscalYear++
+	}
+	return fiscalYear, fiscalQuarter
+}
+
+func consecutiveQuarterWindow(rows []model.QuarterlyPoint) bool {
+	if len(rows) < 2 {
+		return true
+	}
+	previous, err := time.Parse("2006-01-02", rows[0].PeriodEnd)
+	if err != nil {
+		return false
+	}
+	for _, row := range rows[1:] {
+		current, parseErr := time.Parse("2006-01-02", row.PeriodEnd)
+		if parseErr != nil {
+			return false
+		}
+		days := int(current.Sub(previous).Hours() / 24)
+		if days < 60 || days > 125 {
+			return false
+		}
+		previous = current
+	}
+	return true
 }
 
 func durationQuarterFacts(gaap map[string]factConcept, tags []string, unit string) map[string]quarterFact {

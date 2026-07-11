@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, RotateCcw } from "lucide-react";
 
 export interface ChartPointer { activeLabel?: string | number }
+export interface SharedChartRange { zoom?: [number, number]; onZoom?: (zoom?: [number, number]) => void }
+export interface SharedLegendFilter { hiddenKeys?: Set<string>; onHiddenKeys?: (hidden: Set<string>) => void }
 
-export function useChartZoom(domain: [number, number], minimumSpan: number) {
-  const [zoom, setZoom] = useState<[number, number]>();
+export function useChartZoom(domain: [number, number], minimumSpan: number, controlledZoom?: [number, number], onZoom?: (zoom?: [number, number]) => void) {
+  const [localZoom, setLocalZoom] = useState<[number, number]>();
   const [selection, setSelection] = useState<[number, number]>();
   const selectionRef = useRef<[number, number]>();
+  const controlled = onZoom !== undefined;
+  const zoom = controlled ? controlledZoom : localZoom;
   useEffect(() => {
-    setZoom(undefined);
+    setLocalZoom(undefined);
     setSelection(undefined);
     selectionRef.current = undefined;
   }, [domain[0], domain[1]]);
@@ -30,39 +34,55 @@ export function useChartZoom(domain: [number, number], minimumSpan: number) {
     if (!current) return;
     const ordered: [number, number] = current[0] <= current[1] ? current : [current[1], current[0]];
     if (ordered[1] - ordered[0] >= minimumSpan) {
-      setZoom([Math.max(domain[0], ordered[0]), Math.min(domain[1], ordered[1])]);
+      const next: [number, number] = [Math.max(domain[0], ordered[0]), Math.min(domain[1], ordered[1])];
+      if (controlled) onZoom?.(next); else setLocalZoom(next);
     }
     selectionRef.current = undefined;
     setSelection(undefined);
   }
-  return { activeDomain: zoom ?? domain, zoom, selection, start, move, finish, reset: () => setZoom(undefined) };
+  return { activeDomain: zoom ?? domain, zoom, selection, start, move, finish, reset: () => controlled ? onZoom?.(undefined) : setLocalZoom(undefined) };
 }
 
-export function useLegendFilter(keys: string[]) {
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+export function useLegendFilter(keys: string[], controlledHidden?: Set<string>, onHiddenKeys?: (hidden: Set<string>) => void) {
+  const [localHidden, setLocalHidden] = useState<Set<string>>(() => new Set());
+  const controlled = onHiddenKeys !== undefined;
+  const hidden = controlled ? new Set([...(controlledHidden ?? [])].filter((key) => keys.includes(key))) : localHidden;
   const signature = keys.join("|");
   useEffect(() => {
-    setHidden((current) => new Set([...current].filter((key) => keys.includes(key))));
+    if (!controlled) setLocalHidden((current) => new Set([...current].filter((key) => keys.includes(key))));
   }, [signature]);
   const visibleKeys = useMemo(() => keys.filter((key) => !hidden.has(key)), [hidden, signature]);
   function toggle(key: string) {
     if (!keys.includes(key)) return;
-    setHidden((current) => {
+    const update = (current: Set<string>) => {
       if (!current.has(key) && keys.length - current.size <= 1) return current;
       const next = new Set(current);
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
-    });
+    };
+    if (controlled) onHiddenKeys?.(update(hidden)); else setLocalHidden(update);
   }
   return { hidden, visibleKeys, toggle };
 }
 
-export function ChartHeadingMeta({ unit, zoom, onReset, clipped, mode = "date" }: { unit: string; zoom?: [number, number]; onReset: () => void; clipped?: boolean; mode?: "date" | "year" }) {
+export function ChartHeadingMeta({ unit, zoom, onReset, clipped, clippedCount = 0, includeOutliers = false, onToggleOutliers, mode = "date" }: { unit: string; zoom?: [number, number]; onReset: () => void; clipped?: boolean; clippedCount?: number; includeOutliers?: boolean; onToggleOutliers?: () => void; mode?: "date" | "year" }) {
+	const count = clippedCount || (clipped ? 1 : 0);
   return <div className="chart-heading-meta">
     <span>{zoom ? domainLabel(zoom, mode) : unit}</span>
-    {clipped && <span className="chart-domain-alert" title="Axis excludes isolated extreme outliers"><CircleAlert size={13} aria-label="Axis excludes isolated extreme outliers" /></span>}
+		{count > 0 && (onToggleOutliers ? <button type="button" className="chart-outlier-button" onClick={onToggleOutliers} title={includeOutliers ? "Fit axis to typical observations" : "Include isolated extreme observations in the axis range"}><CircleAlert size={13} />{includeOutliers ? "Fit typical" : `${count} clipped / include`}</button> : <span className="chart-domain-alert" title="Axis excludes isolated extreme outliers"><CircleAlert size={13} aria-label="Axis excludes isolated extreme outliers" /></span>)}
     {zoom && <button type="button" className="icon-button" onClick={onReset} title="Reset selected period" aria-label="Reset selected period"><RotateCcw size={13} /></button>}
   </div>;
+}
+
+export function useFittedYDomain(rows: Array<Record<string, unknown>>, domain: [number, number], keys: string[], xKey: string, options: { log?: boolean; includeZero?: boolean } = {}) {
+	const [includeOutliers, setIncludeOutliers] = useState(false);
+	const fitted = fittedYDomain(rows, domain, keys, xKey, options);
+	return {
+		...fitted,
+		domain: includeOutliers ? fitted.fullDomain : fitted.domain,
+		includeOutliers,
+		toggleOutliers: () => setIncludeOutliers((value) => !value),
+	};
 }
 
 export function fittedYDomain(rows: Array<Record<string, unknown>>, domain: [number, number], keys: string[], xKey: string, options: { log?: boolean; includeZero?: boolean } = {}) {
@@ -74,7 +94,7 @@ export function fittedYDomain(rows: Array<Record<string, unknown>>, domain: [num
       return typeof value === "number" && Number.isFinite(value) && (!options.log || value > 0) ? [{ key, x, value }] : [];
     });
   });
-  if (!observations.length) return { domain: ["auto", "auto"] as ["auto", "auto"], clipped: false };
+  if (!observations.length) return { domain: ["auto", "auto"] as ["auto", "auto"], fullDomain: ["auto", "auto"] as ["auto", "auto"], clipped: false, clippedCount: 0 };
 
   const excluded = new Set<string>();
   for (const key of keys) {
@@ -96,9 +116,16 @@ export function fittedYDomain(rows: Array<Record<string, unknown>>, domain: [num
       if (outside && neighborsInside && Math.abs(current - previous) > 3 * spread && Math.abs(current - next) > 3 * spread) excluded.add(`${key}|${series[index].x}`);
     }
   }
-  const fitted = observations.filter((item) => !excluded.has(`${item.key}|${item.x}`)).map((item) => item.value).sort((left, right) => left - right);
-  let low = fitted[0];
-  let high = fitted[fitted.length-1];
+	const fitted = observations.filter((item) => !excluded.has(`${item.key}|${item.x}`)).map((item) => item.value).sort((left, right) => left - right);
+	const all = observations.map((item) => item.value).sort((left, right) => left - right);
+	const fittedDomain = paddedDomain(fitted, options);
+	const fullDomain = paddedDomain(all, options);
+	return { domain: fittedDomain, fullDomain, clipped: excluded.size > 0, clippedCount: excluded.size };
+}
+
+function paddedDomain(values: number[], options: { log?: boolean; includeZero?: boolean }) {
+	let low = values[0];
+	let high = values[values.length-1];
   if (options.includeZero) {
     if (low > 0) low = 0;
     if (high < 0) high = 0;
@@ -112,7 +139,7 @@ export function fittedYDomain(rows: Array<Record<string, unknown>>, domain: [num
     low -= padding;
     high += padding;
   }
-  return { domain: [low, high] as [number, number], clipped: excluded.size > 0 };
+	return [low, high] as [number, number];
 }
 
 function quantile(sorted: number[], position: number) {

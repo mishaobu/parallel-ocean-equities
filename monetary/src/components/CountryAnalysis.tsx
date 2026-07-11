@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, CircleAlert, ExternalLink } from "lucide-react";
-import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ArrowDown, ArrowUp, ArrowUpDown, CircleAlert, ExternalLink, RotateCcw } from "lucide-react";
+import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useRangeSelection, type RangeInteraction } from "../chartRange";
 import { countryChartRows, countrySnapshots, sortCountrySnapshots, type CountryMetric, type CountrySnapshot, type CountrySort } from "../countryData";
 import type { CountryPoint, CountrySeries } from "../types";
 
@@ -11,10 +12,10 @@ const columns: Array<{ key: CountrySort; label: string; metric?: CountryMetric }
   { key: "inflation", label: "Inflation", metric: "inflation" }, { key: "policyRate", label: "Policy / short", metric: "policyRate" },
   { key: "realRate", label: "Real rate", metric: "realRate" }, { key: "industrialGrowth", label: "Industry", metric: "industrialGrowth" },
   { key: "moneyGrowth", label: "Money", metric: "moneyGrowth" }, { key: "longRate", label: "Long rate", metric: "longRate" },
-  { key: "yieldCurve", label: "Curve", metric: "yieldCurve" }, { key: "asOf", label: "Latest obs." },
+	{ key: "yieldCurve", label: "Curve", metric: "yieldCurve" }, { key: "asOf", label: "Common through" },
 ];
 
-export function CountryAnalysis({ countries, domain }: { countries: CountrySeries[]; domain: [number, number] }) {
+export function CountryAnalysis({ countries, domain, rangeSelected, onSelectDomain, onResetDomain }: { countries: CountrySeries[]; domain: [number, number] } & RangeInteraction) {
   const snapshots = useMemo(() => countrySnapshots(countries), [countries]);
   const [sortKey, setSortKey] = useState<CountrySort>("realRate");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
@@ -44,17 +45,17 @@ export function CountryAnalysis({ countries, domain }: { countries: CountrySerie
 
     <CountryHeader snapshot={active} />
     <section className="chart-grid country-charts">
-      <CountryChart title="Inflation and policy" note={`${active.country.policyLabel} against headline and core inflation`} points={active.country.points ?? []} domain={domain} series={[
+		<CountryChart title="Inflation and policy" note={`${active.country.policyLabel} against headline and core inflation`} points={active.country.points ?? []} domain={domain} rangeSelected={rangeSelected} onSelectDomain={onSelectDomain} onResetDomain={onResetDomain} series={[
         { key: "inflation", label: "Headline inflation", color: palette.red }, { key: "coreInflation", label: "Core inflation", color: palette.gold }, { key: "policyRate", label: active.country.policyLabel, color: palette.ink }, { key: "realRate", label: "Ex-post real rate", color: palette.blue },
       ]} primary />
-      <CountryChart title="Growth and money" note="Industrial momentum, broad-money growth and unemployment" points={active.country.points ?? []} domain={domain} series={[
+		<CountryChart title="Growth and money" note="Industrial momentum, broad-money growth and unemployment" points={active.country.points ?? []} domain={domain} rangeSelected={rangeSelected} onSelectDomain={onSelectDomain} onResetDomain={onResetDomain} series={[
         { key: "industrialGrowth", label: "Industrial production", color: palette.green }, { key: "moneyGrowth", label: "Broad money", color: palette.violet }, { key: "unemployment", label: "Unemployment", color: palette.red },
       ]} />
-      <CountryChart title="Rates and currency" note={`${active.country.fxLabel}; FX uses the right axis`} points={active.country.points ?? []} domain={domain} series={[
+		<CountryChart title="Rates and currency" note={`${active.country.fxLabel}; FX uses the right axis`} points={active.country.points ?? []} domain={domain} rangeSelected={rangeSelected} onSelectDomain={onSelectDomain} onResetDomain={onResetDomain} series={[
         { key: "longRate", label: "Long government rate", color: palette.blue }, { key: "yieldCurve", label: "Long less policy", color: palette.cyan }, { key: "fx", label: active.country.fxLabel, color: palette.gold, axis: "right" },
       ]} wide />
     </section>
-    <section className="country-basis"><div><strong>Series coverage</strong><span>{active.country.sources?.length ?? 0} FRED series / policy definitions differ by economy</span></div><a href={`/macro/?country=${active.country.code}`}><span>Open in Macro</span><ExternalLink size={13} /></a></section>
+	<section className="country-basis"><div><strong>Series coverage</strong><span>{active.country.sources?.length ?? 0} source series / policy definitions differ by economy</span></div><a href={`/macro/?country=${active.country.code}&view=countries`}><span>Open in Macro</span><ExternalLink size={13} /></a></section>
     {!!active.country.warnings?.length && <div className="country-warning"><CircleAlert size={14} />{active.country.warnings.join(" / ")}</div>}
   </>;
 }
@@ -78,16 +79,18 @@ function CountryHeader({ snapshot }: { snapshot: CountrySnapshot }) {
 
 type CountryChartMetric = Extract<keyof CountryPoint, CountryMetric>;
 interface CountryChartSeries { key: CountryChartMetric; label: string; color: string; axis?: "left" | "right" }
-function CountryChart({ title, note, points, domain, series, primary, wide }: { title: string; note: string; points: CountryPoint[]; domain: [number, number]; series: CountryChartSeries[]; primary?: boolean; wide?: boolean }) {
-  const rows = countryChartRows(points, domain);
-  const hasData = rows.some((row) => series.some((item) => typeof row[item.key] === "number"));
-  return <article className={`chart-frame${primary ? " chart-primary" : ""}${wide ? " country-chart-wide" : ""}`}><header><div><h2>{title}</h2><span>{note}</span></div></header><div className="chart-canvas">
-    {!hasData ? <div className="chart-empty">No observations in selected range</div> : <ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 15, right: 6, bottom: 3, left: 0 }}>
+function CountryChart({ title, note, points, domain, series, primary, wide, rangeSelected, onSelectDomain, onResetDomain }: { title: string; note: string; points: CountryPoint[]; domain: [number, number]; series: CountryChartSeries[]; primary?: boolean; wide?: boolean } & RangeInteraction) {
+	const rows = countryChartRows(points, domain);
+	const hasData = rows.some((row) => series.some((item) => typeof row[item.key] === "number"));
+	const range = useRangeSelection(domain, onSelectDomain);
+	return <article className={`chart-frame${primary ? " chart-primary" : ""}${wide ? " country-chart-wide" : ""}`}><header><div><h2>{title}</h2><span>{note}</span></div>{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" aria-label="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}</header><div className="chart-canvas">
+		{!hasData ? <div className="chart-empty">No observations in selected range</div> : <ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 15, right: 6, bottom: 3, left: 0 }} onMouseDown={range.start} onMouseMove={range.move} onMouseUp={range.finish} onMouseLeave={range.finish}>
       <CartesianGrid vertical={false} stroke="#e4e8e5" /><XAxis dataKey="timestamp" type="number" scale="time" domain={domain} tickFormatter={(value) => String(new Date(value).getUTCFullYear())} tick={{ fill: "#69746d", fontSize: 10 }} minTickGap={38} axisLine={false} tickLine={false} />
       <YAxis yAxisId="left" tickFormatter={(value) => `${Number(value).toFixed(Math.abs(Number(value)) < 10 ? 1 : 0)}%`} tick={{ fill: "#69746d", fontSize: 10 }} axisLine={false} tickLine={false} width={50} />
       {series.some((item) => item.axis === "right") && <YAxis yAxisId="right" orientation="right" tickFormatter={(value) => Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value))} tick={{ fill: "#69746d", fontSize: 10 }} axisLine={false} tickLine={false} width={48} />}
       <Tooltip itemSorter={(item) => -(Number(item.value) || 0)} labelFormatter={(value) => formatDate(new Date(Number(value)).toISOString())} formatter={(value, name) => [Number(value).toFixed(2), name]} contentStyle={{ border: "1px solid #cdd5cf", borderRadius: 4, fontSize: 11 }} />
-      <Legend iconType="line" wrapperStyle={{ fontSize: 10 }} /><ReferenceLine yAxisId="left" y={0} stroke="#aeb7b1" />
+			<Legend iconType="line" wrapperStyle={{ fontSize: 10 }} /><ReferenceLine yAxisId="left" y={0} stroke="#aeb7b1" />
+			{range.selection && <ReferenceArea yAxisId="left" x1={range.selection[0]} x2={range.selection[1]} fill="#7a9b88" fillOpacity={0.16} strokeOpacity={0} />}
       {series.map((item) => <Line key={item.key} yAxisId={item.axis ?? "left"} type="monotone" dataKey={item.key} name={item.label} stroke={item.color} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />)}
     </LineChart></ResponsiveContainer>}
   </div></article>;

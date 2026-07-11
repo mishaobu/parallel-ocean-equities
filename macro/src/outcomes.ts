@@ -1,4 +1,5 @@
 import type { ScenarioInputs } from "./data";
+import { returnValue } from "./data";
 import type { AssetSeries, CountryPoint, CountrySeries, MacroPoint, PricePoint, VintagePoint } from "./types";
 
 export const regimes = ["Inflationary growth", "Stagflation", "Disinflationary slowdown", "Disinflationary growth"] as const;
@@ -31,6 +32,7 @@ export interface OutcomeStat {
   positiveRate: number;
   ciLow: number;
   ciHigh: number;
+	adjustedPValue: number;
   medianDrawdown: number;
   worstDrawdown: number;
   startDate: string;
@@ -47,7 +49,14 @@ export function regimeOutcomes(assets: AssetSeries[], country: CountrySeries | u
     values.push(observation);
     grouped.set(key, values);
   });
-  return [...grouped.values()].map(summarizeOutcomes).sort((left, right) => left.symbol.localeCompare(right.symbol) || left.horizon - right.horizon || left.regime.localeCompare(right.regime));
+	const summarized = [...grouped.values()].map(summarizeOutcomes);
+	const families = new Map<string, OutcomeStat[]>();
+	summarized.forEach((row) => {
+		const key = `${row.regime}|${row.horizon}`;
+		families.set(key, [...(families.get(key) ?? []), row]);
+	});
+	families.forEach(applyHolmAdjustment);
+	return summarized.sort((left, right) => left.symbol.localeCompare(right.symbol) || left.horizon - right.horizon || left.regime.localeCompare(right.regime));
 }
 
 export function currentRegime(country: CountrySeries | undefined): Regime | undefined {
@@ -67,18 +76,18 @@ export function classifyRegime(inflation: number, growth: number): Regime {
 }
 
 function assetObservations(asset: AssetSeries, macro: CountryPoint[], domain: [number, number], vintages: VintagePoint[]): OutcomeObservation[] {
-  const prices = [...(asset.points ?? [])].filter((point) => point.close > 0).sort((left, right) => left.date.localeCompare(right.date));
-  const observations: OutcomeObservation[] = [];
-  let lastStart = -Infinity;
-  for (let index = 0; index < prices.length; index += 1) {
-    const start = prices[index];
-    const startTime = Date.parse(start.date);
-    if (startTime < domain[0] || startTime > domain[1] || monthDistance(lastStart, startTime) < 3) continue;
-    const macroPoint = vintages.length ? pointAtOrBefore(vintages, startTime) : pointAtOrBefore(macro, addMonths(startTime, -2));
-    if (!macroPoint || !finite(macroPoint.inflation) || !finite(macroPoint.industrialGrowth)) continue;
-    let sampled = false;
-    for (const horizon of [3, 6, 12] as ForwardHorizon[]) {
-      const endIndex = pointAtOrAfter(prices, addMonths(startTime, horizon), index + 1);
+	const prices = [...(asset.points ?? [])].filter((point) => returnValue(point) > 0).sort((left, right) => left.date.localeCompare(right.date));
+	const observations: OutcomeObservation[] = [];
+	const lastStart: Record<ForwardHorizon, number> = { 3: -Infinity, 6: -Infinity, 12: -Infinity };
+	for (let index = 0; index < prices.length; index += 1) {
+		const start = prices[index];
+		const startTime = Date.parse(start.date);
+		if (startTime < domain[0] || startTime > domain[1]) continue;
+		const macroPoint = vintages.length ? pointAtOrBefore(vintages, startTime) : pointAtOrBefore(macro, addMonths(startTime, -2));
+		if (!macroPoint || !finite(macroPoint.inflation) || !finite(macroPoint.industrialGrowth)) continue;
+		for (const horizon of [3, 6, 12] as ForwardHorizon[]) {
+			if (monthDistance(lastStart[horizon], startTime) < horizon) continue;
+			const endIndex = pointAtOrAfter(prices, addMonths(startTime, horizon), index + 1);
       if (endIndex < 0) continue;
       const end = prices[endIndex];
       const endTime = Date.parse(end.date);
@@ -86,13 +95,12 @@ function assetObservations(asset: AssetSeries, macro: CountryPoint[], domain: [n
       observations.push({
         symbol: asset.symbol, label: asset.label, group: asset.group, region: asset.region,
         regime: classifyRegime(macroPoint.inflation, macroPoint.industrialGrowth), horizon,
-        startDate: start.date, endDate: end.date, returnPct: (end.close / start.close - 1) * 100,
-        maxDrawdownPct: maxDrawdown(prices.slice(index, endIndex + 1)),
-      });
-      sampled = true;
-    }
-    if (sampled) lastStart = startTime;
-  }
+			startDate: start.date, endDate: end.date, returnPct: (returnValue(end) / returnValue(start) - 1) * 100,
+				maxDrawdownPct: maxDrawdown(prices.slice(index, endIndex + 1)),
+			});
+			lastStart[horizon] = startTime;
+		}
+	}
   return observations;
 }
 
@@ -100,12 +108,13 @@ function summarizeOutcomes(rows: OutcomeObservation[]): OutcomeStat {
   const returns = rows.map((row) => row.returnPct);
   const drawdowns = rows.map((row) => row.maxDrawdownPct);
   const average = mean(returns);
-  const deviation = sampleDeviation(returns, average);
-  const margin = returns.length > 1 ? critical95(returns.length) * deviation / Math.sqrt(returns.length) : 0;
+	const standardError = hacMeanStandardError(returns);
+	const margin = returns.length > 1 ? critical95(returns.length) * standardError : 0;
   return {
     symbol: rows[0].symbol, label: rows[0].label, group: rows[0].group, region: rows[0].region,
     regime: rows[0].regime, horizon: rows[0].horizon, count: rows.length,
     average, median: median(returns), positiveRate: returns.filter((value) => value > 0).length / returns.length,
+		adjustedPValue: twoSidedNormalP(standardError > 0 ? average / standardError : 0),
     ciLow: average - margin, ciHigh: average + margin, medianDrawdown: median(drawdowns), worstDrawdown: Math.min(...drawdowns),
     startDate: rows.reduce((value, row) => row.startDate < value ? row.startDate : value, rows[0].startDate),
     endDate: rows.reduce((value, row) => row.endDate > value ? row.endDate : value, rows[0].endDate),
@@ -119,7 +128,9 @@ export interface CalibrationModel {
   group: string;
   sampleSize: number;
   rSquared: number;
+	stability: number;
   exposures: ScenarioInputs;
+	uncertainty: ScenarioInputs;
   scales: ScenarioInputs;
 }
 
@@ -127,7 +138,7 @@ export function calibrateScenarioModels(assets: AssetSeries[], points: MacroPoin
   return assets.flatMap((asset) => {
     const rows = calibrationRows(asset.points ?? [], points, domain);
     const fitted = fitScenarioCalibration(rows);
-    return fitted ? [{ symbol: asset.symbol, label: asset.label, group: asset.group, ...fitted }] : [];
+		return fitted && fitted.rSquared >= .1 && fitted.stability >= .6 ? [{ symbol: asset.symbol, label: asset.label, group: asset.group, ...fitted }] : [];
   });
 }
 
@@ -141,30 +152,57 @@ export function calibratedScenarioImpacts(models: CalibrationModel[], inputs: Sc
 }
 
 export function fitScenarioCalibration(rows: CalibrationRow[]): Omit<CalibrationModel, "symbol" | "label" | "group"> | undefined {
-  if (rows.length < 12) return undefined;
-  const scales = factorObject((key) => sampleDeviation(rows.map((row) => row.factors[key])));
-  if (factorKeys.some((key) => !finite(scales[key]) || scales[key] < 1e-6)) return undefined;
-  const centers = factorObject((key) => mean(rows.map((row) => row.factors[key])));
-  const matrix = rows.map((row) => [1, ...factorKeys.map((key) => (row.factors[key] - centers[key]) / scales[key])]);
-  const outcome = rows.map((row) => row.outcome);
-  const coefficients = ridgeRegression(matrix, outcome, 0.35);
-  if (!coefficients) return undefined;
-  const fitted = matrix.map((row) => row.reduce((sum, value, index) => sum + value * coefficients[index], 0));
-  const outcomeMean = mean(outcome);
-  const total = outcome.reduce((sum, value) => sum + (value - outcomeMean) ** 2, 0);
-  const residual = outcome.reduce((sum, value, index) => sum + (value - fitted[index]) ** 2, 0);
-  return {
-    sampleSize: rows.length,
-    rSquared: total > 0 ? Math.max(0, Math.min(1, 1 - residual / total)) : 0,
+	if (rows.length < 60) return undefined;
+	const split = Math.floor(rows.length * .7);
+	const training = rows.slice(0, split);
+	const validation = rows.slice(split);
+	if (training.length < 36 || validation.length < 12) return undefined;
+	const scales = factorObject((key) => sampleDeviation(training.map((row) => row.factors[key])));
+	if (factorKeys.some((key) => !finite(scales[key]) || scales[key] < 1e-6)) return undefined;
+	const centers = factorObject((key) => mean(training.map((row) => row.factors[key])));
+	const matrix = training.map((row) => [1, ...factorKeys.map((key) => (row.factors[key] - centers[key]) / scales[key])]);
+	const outcome = training.map((row) => row.outcome);
+	const coefficients = ridgeRegression(matrix, outcome, 0.35);
+	if (!coefficients) return undefined;
+	const validationOutcome = validation.map((row) => row.outcome);
+	const validationFitted = validation.map((row) => coefficients[0] + factorKeys.reduce((sum, key, index) => sum + ((row.factors[key] - centers[key]) / scales[key]) * coefficients[index + 1], 0));
+	const outcomeMean = mean(validationOutcome);
+	const total = validationOutcome.reduce((sum, value) => sum + (value - outcomeMean) ** 2, 0);
+	const residual = validationOutcome.reduce((sum, value, index) => sum + (value - validationFitted[index]) ** 2, 0);
+	const bootstrap = bootstrapCoefficients(training, centers, scales, 36);
+	if (bootstrap.length < 12) return undefined;
+	const uncertainty = factorObject((key) => sampleDeviation(bootstrap.map((sample) => sample[factorKeys.indexOf(key) + 1])));
+	const stability = factorKeys.reduce((sum, _key, index) => {
+		const coefficient = coefficients[index + 1];
+		return sum + bootstrap.filter((sample) => Math.sign(sample[index + 1]) === Math.sign(coefficient)).length / bootstrap.length;
+	}, 0) / factorKeys.length;
+	return {
+		sampleSize: rows.length,
+		rSquared: total > 0 ? Math.max(-1, Math.min(1, 1 - residual / total)) : 0,
+		stability,
     exposures: factorObject((key) => coefficients[factorKeys.indexOf(key) + 1]),
+		uncertainty,
     scales,
   };
+}
+
+function bootstrapCoefficients(rows: CalibrationRow[], centers: ScenarioInputs, scales: ScenarioInputs, samples: number) {
+	const block = 4;
+	return Array.from({ length: samples }, (_, sample) => {
+		const sampled: CalibrationRow[] = [];
+		for (let blockIndex = 0; sampled.length < rows.length; blockIndex += 1) {
+			const start = (sample * 17 + blockIndex * 11 + sample * blockIndex * 3) % rows.length;
+			for (let offset = 0; offset < block && sampled.length < rows.length; offset += 1) sampled.push(rows[(start + offset) % rows.length]);
+		}
+		const matrix = sampled.map((row) => [1, ...factorKeys.map((key) => (row.factors[key] - centers[key]) / scales[key])]);
+		return ridgeRegression(matrix, sampled.map((row) => row.outcome), .35);
+	}).filter((value): value is number[] => value !== undefined);
 }
 
 const factorKeys: Array<keyof ScenarioInputs> = ["growth", "inflation", "realRate", "dollar", "liquidity"];
 
 function calibrationRows(pricesInput: PricePoint[], macroInput: MacroPoint[], domain: [number, number]): CalibrationRow[] {
-  const prices = [...pricesInput].filter((point) => point.close > 0).sort((left, right) => left.date.localeCompare(right.date));
+	const prices = [...pricesInput].filter((point) => returnValue(point) > 0).sort((left, right) => left.date.localeCompare(right.date));
   const macro = [...macroInput].sort((left, right) => left.date.localeCompare(right.date));
   const rows: CalibrationRow[] = [];
   let lastStart = -Infinity;
@@ -176,7 +214,7 @@ function calibrationRows(pricesInput: PricePoint[], macroInput: MacroPoint[], do
     const macroIndex = indexAtOrBefore(macro, addMonths(startTime, -2));
     const factors = macroIndex < 0 ? undefined : factorChange(macro, macroIndex);
     if (!factors) continue;
-    rows.push({ factors, outcome: (prices[endIndex].close / prices[index].close - 1) * 100 });
+		rows.push({ factors, outcome: (returnValue(prices[endIndex]) / returnValue(prices[index]) - 1) * 100 });
     lastStart = startTime;
   }
   return rows;
@@ -243,9 +281,9 @@ function pointAtOrAfter(points: Array<{ date: string }>, timestamp: number, star
 }
 
 function maxDrawdown(points: PricePoint[]) {
-  let peak = points[0]?.close ?? 0;
+	let peak = points[0] ? returnValue(points[0]) : 0;
   let drawdown = 0;
-  points.forEach((point) => { peak = Math.max(peak, point.close); if (peak > 0) drawdown = Math.min(drawdown, (point.close / peak - 1) * 100); });
+	points.forEach((point) => { const value = returnValue(point); peak = Math.max(peak, value); if (peak > 0) drawdown = Math.min(drawdown, (value / peak - 1) * 100); });
   return drawdown;
 }
 
@@ -266,3 +304,34 @@ function median(values: number[]) { const sorted = [...values].sort((a, b) => a 
 function sampleDeviation(values: number[], center = mean(values)) { return values.length > 1 ? Math.sqrt(values.reduce((sum, value) => sum + (value - center) ** 2, 0) / (values.length - 1)) : 0; }
 function critical95(count: number) { return count <= 5 ? 2.776 : count <= 10 ? 2.262 : count <= 20 ? 2.093 : count <= 30 ? 2.045 : 1.96; }
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+
+function hacMeanStandardError(values: number[]) {
+	if (values.length < 2) return 0;
+	const center = mean(values);
+	const residuals = values.map((value) => value - center);
+	const lag = Math.max(1, Math.floor(4 * (values.length / 100) ** (2 / 9)));
+	let longRunVariance = residuals.reduce((sum, value) => sum + value * value, 0) / values.length;
+	for (let offset = 1; offset <= Math.min(lag, values.length - 1); offset += 1) {
+		const covariance = residuals.slice(offset).reduce((sum, value, index) => sum + value * residuals[index], 0) / values.length;
+		longRunVariance += 2 * (1 - offset / (lag + 1)) * covariance;
+	}
+	return Math.sqrt(Math.max(0, longRunVariance) / values.length);
+}
+
+function applyHolmAdjustment(rows: OutcomeStat[]) {
+	const ordered = [...rows].sort((left, right) => left.adjustedPValue - right.adjustedPValue);
+	let previous = 0;
+	ordered.forEach((row, index) => {
+		const adjusted = Math.min(1, row.adjustedPValue * (ordered.length - index));
+		row.adjustedPValue = Math.max(previous, adjusted);
+		previous = row.adjustedPValue;
+	});
+}
+
+function twoSidedNormalP(value: number) {
+	const z = Math.abs(value);
+	const t = 1 / (1 + .2316419 * z);
+	const density = .3989422804 * Math.exp(-z * z / 2);
+	const tail = density * t * (.31938153 + t * (-.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+	return Math.min(1, Math.max(0, 2 * tail));
+}

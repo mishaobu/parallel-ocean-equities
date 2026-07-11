@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Calculator, GitCompareArrows, Landmark, LoaderCircle, Plus, RefreshCw, Trash2, TrendingUp } from "lucide-react";
+import { BarChart3, Calculator, Download, GitCompareArrows, Globe2, ImageDown, Landmark, Link2, LoaderCircle, Pin, Plus, RefreshCw, Save, Trash2, TrendingUp, X } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
-import { historyDomain, qualityHistoryDomain, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
+import { historyDomain, qualityHistoryDomain, returnValue, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
@@ -19,10 +19,11 @@ import { ValuationWorkbench } from "./components/ValuationWorkbench";
 import type { Equity, MacroSeries, MetricKey, StateResponse } from "./types";
 import { formatValuation, valuationRows, type ValuationMetricKey } from "./valuationData";
 import { qualityRows, type QualityMetricKey } from "./qualityData";
+import { copyCurrentLink, exportEquitiesCSV, exportPrimaryChartPNG } from "./exports";
 
 const metrics: MetricKey[] = ["revenueB", "capexB", "netIncomeB", "dilutedEps", "peRatio"];
 type ViewMode = "compare" | "ticker" | "models";
-type UniverseKey = "core" | "compute" | "asia" | "all";
+type UniverseKey = string;
 
 const universes: { key: UniverseKey; label: string; tickers: string[] }[] = [
   { key: "core", label: "Core", tickers: ["AMZN", "GOOGL", "META", "MSFT", "SPY", "QQQ"] },
@@ -35,12 +36,16 @@ function App() {
   const [payload, setPayload] = useState<StateResponse | null>(null);
   const [details, setDetails] = useState<Record<string, Equity>>({});
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState("AMZN");
-  const [mode, setMode] = useState<ViewMode>("compare");
-  const [metric, setMetric] = useState<MetricKey>("capexB");
+  const [selected, setSelected] = useState(() => new URLSearchParams(window.location.search).get("ticker")?.toUpperCase() || "AMZN");
+  const [mode, setMode] = useState<ViewMode>(() => initialParam("view", ["compare", "ticker", "models"], "compare"));
+  const [metric, setMetric] = useState<MetricKey>(() => initialParam("metric", metrics, "capexB"));
   const [input, setInput] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState("");
+	const [submitting, setSubmitting] = useState(false);
+	const [loadingDetail, setLoadingDetail] = useState("");
+	const [tickerPreview, setTickerPreview] = useState<{ ticker: string; company: string; instrumentType: string; source: string }>();
+	const [previewError, setPreviewError] = useState("");
+	const [recentlyRemoved, setRecentlyRemoved] = useState<string>();
+	const refreshCount = (payload?.runtime.inFlight ?? 0) + (payload?.runtime.macroRefreshing ? 1 : 0);
 
   const load = useCallback(async () => {
     try {
@@ -67,16 +72,15 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 30_000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+	useEffect(() => {
+		void load();
+		const timer = window.setInterval(() => void load(), refreshCount ? 10_000 : 300_000);
+		return () => window.clearInterval(timer);
+	}, [load, refreshCount]);
 
   const equities = useMemo(() => Object.values(payload?.state.tickers ?? {}).sort((a, b) => a.ticker.localeCompare(b.ticker)), [payload]);
   const overviewEquity = payload?.state.tickers[selected] ?? equities[0];
   const selectedEquity = details[selected] ?? overviewEquity;
-  const refreshCount = (payload?.runtime.inFlight ?? 0) + (payload?.runtime.macroRefreshing ? 1 : 0);
 
   useEffect(() => {
     if (mode === "compare" || !selected || loadingDetail === selected) return;
@@ -84,10 +88,24 @@ function App() {
     if (!detail || detail.updatedAt !== overviewEquity?.updatedAt) void loadDetail(selected);
   }, [details, loadDetail, loadingDetail, mode, overviewEquity?.updatedAt, selected]);
 
-  async function addTicker(event: FormEvent) {
-    event.preventDefault();
-    const ticker = input.trim().toUpperCase();
-    if (!ticker) return;
+	useEffect(() => {
+		const ticker = input.trim().toUpperCase();
+		setTickerPreview(undefined); setPreviewError("");
+		if (!/^[A-Z0-9][A-Z0-9.-]{0,9}$/.test(ticker)) return;
+		const timer = window.setTimeout(() => { void api.previewTicker(ticker).then((preview) => setTickerPreview(preview)).catch((requestError) => setPreviewError(requestError instanceof Error ? requestError.message : "Ticker not found")); }, 350);
+		return () => window.clearTimeout(timer);
+	}, [input]);
+	useEffect(() => { const url = new URL(window.location.href); url.searchParams.set("view", mode); url.searchParams.set("ticker", selected); url.searchParams.set("metric", metric); window.history.replaceState({}, "", url); }, [metric, mode, selected]);
+
+	async function addTicker(event: FormEvent) {
+		event.preventDefault();
+		const ticker = input.trim().toUpperCase();
+		if (!ticker) return;
+		if (!/^[A-Z0-9][A-Z0-9.-]{0,14}$/.test(ticker)) {
+			setError("Enter a ticker with letters, numbers, dots, or hyphens (for example NVDA or 005930.KS)");
+			return;
+		}
+		if (!tickerPreview || tickerPreview.ticker !== ticker) { setError(previewError || "Wait for the ticker preview before adding this instrument"); return; }
     setSubmitting(true);
     try {
       await api.addTicker(ticker);
@@ -112,8 +130,10 @@ function App() {
     await load();
   }
 
-  async function removeTicker(ticker: string) {
-    await api.removeTicker(ticker);
+	async function removeTicker(ticker: string) {
+		if (!window.confirm(`Remove ${ticker} from this workspace? The persisted analysis will be deleted.`)) return;
+		await api.removeTicker(ticker);
+		setRecentlyRemoved(ticker);
     setDetails((current) => {
       const next = { ...current };
       delete next[ticker];
@@ -123,47 +143,57 @@ function App() {
     await load();
   }
 
+	async function undoRemove() { const ticker = recentlyRemoved; if (!ticker) return; setRecentlyRemoved(undefined); await api.addTicker(ticker); setSelected(ticker); setMode("ticker"); await load(); }
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand"><BarChart3 size={21} /><strong>Equities</strong><a href={`/monetary/?ticker=${encodeURIComponent(selected)}`}><Landmark size={14} />Monetary</a><span>parallel-ocean</span></div>
-        <form className="ticker-form" onSubmit={addTicker}>
+		<div className="brand"><BarChart3 size={21} /><strong>Equities</strong><a href={`/monetary/?ticker=${encodeURIComponent(selected)}&view=equity`}><Landmark size={14} />Monetary</a><a href="/macro/"><Globe2 size={14} />Macro</a><span>parallel-ocean</span></div>
+		<div className="ticker-add"><form className="ticker-form" onSubmit={addTicker}>
           <label htmlFor="ticker-input">Add ticker</label>
-          <input id="ticker-input" value={input} onChange={(event) => setInput(event.target.value.toUpperCase())} placeholder="NVDA" maxLength={10} autoComplete="off" />
-          <button type="submit" disabled={submitting || !input.trim()} aria-label="Add ticker"><Plus size={17} /></button>
-        </form>
+			<input id="ticker-input" value={input} onChange={(event) => setInput(event.target.value.toUpperCase())} placeholder="NVDA or 005930.KS" maxLength={15} autoComplete="off" aria-invalid={Boolean(input && (!/^[A-Z0-9][A-Z0-9.-]{0,9}$/.test(input.trim()) || previewError))} aria-describedby="ticker-preview" />
+		  <button type="submit" disabled={submitting || !tickerPreview || tickerPreview.ticker !== input.trim()} aria-label="Add validated ticker"><Plus size={17} /></button>
+		</form><div id="ticker-preview" className={previewError ? "ticker-preview is-error" : "ticker-preview"}>{tickerPreview ? <><strong>{tickerPreview.ticker}</strong><span>{tickerPreview.company}</span><small>{tickerPreview.instrumentType} / {tickerPreview.source}</small></> : input.trim() ? <span>{previewError || "Validating instrument..."}</span> : <span>Enter an exchange-qualified symbol</span>}</div></div>
         <div className="freshness"><span className={refreshCount ? "status-dot active" : "status-dot"} />{refreshCount ? `${refreshCount} refreshing` : `Updated ${timeAgo(payload?.state.updatedAt)}`}</div>
       </header>
 
-      {error && <div className="error-banner" role="alert">{error}</div>}
+		{error && <div className="error-banner" role="alert">{payload ? `Live refresh failed; showing data from ${timeAgo(payload.state.updatedAt)}. ${error}` : error}</div>}
+		{recentlyRemoved && <div className="undo-banner" role="status"><span>{recentlyRemoved} removed</span><button type="button" onClick={() => void undoRemove()}>Undo</button><button type="button" aria-label="Dismiss removal notice" onClick={() => setRecentlyRemoved(undefined)}><X size={14} /></button></div>}
 
-      <div className="workspace">
-        <TickerRail equities={equities} selected={selectedEquity?.ticker ?? ""} onSelect={(ticker) => { setSelected(ticker); setMode("ticker"); }} />
+		{!payload ? <div className="loading"><LoaderCircle className="spin" size={22} /><span>Loading equity workspace</span></div> : <div className="workspace">
+			<TickerRail equities={equities} selected={selectedEquity?.ticker ?? ""} onSelect={(ticker) => { setSelected(ticker); setMode("ticker"); }} />
         <main className="content">
           <div className="view-toolbar">
             <div className="segmented" aria-label="View">
               <button type="button" className={mode === "compare" ? "is-active" : ""} onClick={() => setMode("compare")}><GitCompareArrows size={15} />Compare</button>
               <button type="button" className={mode === "ticker" ? "is-active" : ""} onClick={() => setMode("ticker")} disabled={!selectedEquity}><TrendingUp size={15} />Details</button>
               <button type="button" className={mode === "models" ? "is-active" : ""} onClick={() => setMode("models")} disabled={!selectedEquity || selectedEquity.annuals.length === 0}><Calculator size={15} />Models</button>
-            </div>
-          </div>
+			</div>
+			</div>
 
           {mode === "compare" && <CompareView equities={equities} metric={metric} onMetric={setMetric} macro={payload?.state.macro} />}
           {mode === "ticker" && selectedEquity && <TickerView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} onRefresh={refreshTicker} onRemove={removeTicker} />}
           {mode === "models" && selectedEquity && <ModelsView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} />}
         </main>
-      </div>
+		</div>}
     </div>
   );
 }
 
 function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]; metric: MetricKey; onMetric: (metric: MetricKey) => void; macro?: MacroSeries }) {
-  const [basis, setBasis] = useState<HistoryBasis>("actual");
-  const [range, setRange] = useState<HistoryRange>("max");
-  const [valuationMetric, setValuationMetric] = useState<ValuationMetricKey>("pe");
-  const [qualityMetric, setQualityMetric] = useState<QualityMetricKey>("cash-conversion");
-  const [universe, setUniverse] = useState<UniverseKey>("core");
-  const activeUniverse = universes.find((candidate) => candidate.key === universe) ?? universes[0];
+  const [basis, setBasis] = useState<HistoryBasis>(() => initialParam("basis", ["actual", "forward"], "actual"));
+  const [range, setRange] = useState<HistoryRange>(() => initialParam("range", ["max", "25y", "15y", "10y"], "max"));
+  const [valuationMetric, setValuationMetric] = useState<ValuationMetricKey>(() => initialParam("valuation", valuationRows.map((row) => row.key), "pe"));
+	const [qualityMetric, setQualityMetric] = useState<QualityMetricKey>(() => initialParam("quality", qualityRows.map((row) => row.key), "cash-conversion"));
+	const [universe, setUniverse] = useState<UniverseKey>(() => new URLSearchParams(window.location.search).get("universe") || "core");
+	const [selectedDomain, setSelectedDomain] = useState<[number, number] | undefined>(() => initialDateDomain());
+	const [hiddenTickers, setHiddenTickers] = useState<Set<string>>(() => new Set((new URLSearchParams(window.location.search).get("hidden") || "").split(",").filter(Boolean)));
+	const [savedUniverses, setSavedUniverses] = useState<Array<{ key: string; label: string; tickers: string[] }>>(() => loadJSON("equity-universes", []));
+	const [universeName, setUniverseName] = useState("");
+	const [pinnedMetrics, setPinnedMetrics] = useState<MetricKey[]>(() => loadJSON("equity-pinned-metrics", []));
+	const [actionMessage, setActionMessage] = useState("");
+	const allUniverses = [...universes, ...savedUniverses];
+  const activeUniverse = allUniverses.find((candidate) => candidate.key === universe) ?? universes[0];
   const selectedEquities = useMemo(() => {
     if (activeUniverse.key === "all") return equities;
     const members = new Set(activeUniverse.tickers);
@@ -172,20 +202,39 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
   const fundamentalEquities = useMemo(() => selectedEquities.filter((equity) => equity.annuals.length > 0), [selectedEquities]);
   const domain = useMemo(() => historyDomain(selectedEquities, macro?.points ?? [], range), [macro?.points, range, selectedEquities]);
   const valuationDomain = useMemo(() => valuationHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
-  const qualityDomain = useMemo(() => qualityHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
+	const qualityDomain = useMemo(() => qualityHistoryDomain(fundamentalEquities, range), [fundamentalEquities, range]);
+	const displayDomain = selectedDomain ?? domain;
+	const updateDomain = (next?: [number, number]) => setSelectedDomain(next);
+	useEffect(() => {
+		const available = new Set(selectedEquities.map((equity) => equity.ticker));
+		setHiddenTickers((current) => new Set([...current].filter((ticker) => available.has(ticker))));
+	}, [selectedEquities]);
+	useEffect(() => {
+		const url = new URL(window.location.href);
+		url.searchParams.set("range", range); url.searchParams.set("universe", universe); url.searchParams.set("basis", basis); url.searchParams.set("valuation", valuationMetric); url.searchParams.set("quality", qualityMetric); url.searchParams.set("metric", metric);
+		if (hiddenTickers.size) url.searchParams.set("hidden", [...hiddenTickers].sort().join(",")); else url.searchParams.delete("hidden");
+		if (selectedDomain) { url.searchParams.set("from", dateInput(selectedDomain[0])); url.searchParams.set("to", dateInput(selectedDomain[1])); } else { url.searchParams.delete("from"); url.searchParams.delete("to"); }
+		window.history.replaceState({}, "", url);
+	}, [basis, hiddenTickers, metric, qualityMetric, range, selectedDomain, universe, valuationMetric]);
+	function saveUniverse(event: FormEvent) { event.preventDefault(); const label = universeName.trim(); if (!label) return; const key = `saved:${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`; const tickers = selectedEquities.filter((equity) => !hiddenTickers.has(equity.ticker)).map((equity) => equity.ticker); const next = [...savedUniverses.filter((item) => item.key !== key), { key, label, tickers }]; setSavedUniverses(next); localStorage.setItem("equity-universes", JSON.stringify(next)); setUniverse(key); setUniverseName(""); setActionMessage(`Saved ${label}`); }
+	function removeSavedUniverse() { if (!universe.startsWith("saved:")) return; const next = savedUniverses.filter((item) => item.key !== universe); setSavedUniverses(next); localStorage.setItem("equity-universes", JSON.stringify(next)); setUniverse("core"); setSelectedDomain(undefined); }
+	function pinMetric() { const next = pinnedMetrics.includes(metric) ? pinnedMetrics.filter((item) => item !== metric) : [...pinnedMetrics, metric]; setPinnedMetrics(next); localStorage.setItem("equity-pinned-metrics", JSON.stringify(next)); }
+	async function action(run: () => void | Promise<void>, success: string) { try { await run(); setActionMessage(success); } catch (error) { setActionMessage(error instanceof Error ? error.message : "Action failed"); } }
   return (
     <section className="view">
-      <div className="view-title compare-title"><div><h1>Market history</h1><span>{selectedEquities.length} instruments / {domainLabel(domain)}</span></div>
+		<div className="view-title compare-title"><div><h1>Market history</h1><span>{selectedEquities.length} instruments / {domainLabel(displayDomain)}</span></div>
         <div className="compare-controls">
           <div className="segmented universe-switch" aria-label="Comparison universe">
-            {universes.map((candidate) => <button type="button" key={candidate.key} className={universe === candidate.key ? "is-active" : ""} onClick={() => setUniverse(candidate.key)}>{candidate.label}</button>)}
+            {allUniverses.map((candidate) => <button type="button" key={candidate.key} className={universe === candidate.key ? "is-active" : ""} onClick={() => { setUniverse(candidate.key); setSelectedDomain(undefined); }}>{candidate.label}</button>)}
           </div>
-          <div className="segmented compact-segmented" aria-label="History range">
-            {(["max", "25y", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
-          </div>
+			<div className="segmented compact-segmented" aria-label="History range">
+            {(["max", "25y", "15y", "10y"] as HistoryRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => { setRange(value); setSelectedDomain(undefined); }}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+			</div>
+			<div className="date-range" aria-label="Custom comparison period"><label>From<input type="date" min={dateInput(domain[0])} max={dateInput(displayDomain[1])} value={dateInput(displayDomain[0])} onChange={(event) => setDateDomain(event.target.value, 0, displayDomain, setSelectedDomain)} /></label><label>To<input type="date" min={dateInput(displayDomain[0])} max={dateInput(domain[1])} value={dateInput(displayDomain[1])} onChange={(event) => setDateDomain(event.target.value, 1, displayDomain, setSelectedDomain)} /></label></div>
         </div>
       </div>
-      <PerformanceChart equities={selectedEquities} domain={domain} />
+		<div className="workspace-actions"><form onSubmit={saveUniverse}><input aria-label="Saved universe name" value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder="Universe name" /><button type="submit" title="Save visible tickers as a universe"><Save size={14} />Save</button>{universe.startsWith("saved:") && <button type="button" title="Delete selected saved universe" aria-label="Delete selected saved universe" onClick={removeSavedUniverse}><X size={14} /></button>}</form><div><button type="button" onClick={() => exportEquitiesCSV(selectedEquities.filter((equity) => !hiddenTickers.has(equity.ticker)))} title="Export visible comparison data as CSV"><Download size={14} />CSV</button><button type="button" onClick={() => void action(exportPrimaryChartPNG, "Chart exported")} title="Export primary chart as PNG"><ImageDown size={14} />PNG</button><button type="button" onClick={() => void action(copyCurrentLink, "Link copied")} title="Copy a deep link to this workspace"><Link2 size={14} />Link</button></div><span role="status">{actionMessage}</span></div>
+		<PerformanceChart equities={selectedEquities} domain={domain} zoom={selectedDomain} onZoom={updateDomain} hiddenKeys={hiddenTickers} onHiddenKeys={setHiddenTickers} />
       <div className="section-heading"><div><h2>Valuation history</h2><span>{fundamentalEquities.length} companies / filing-date coverage {domainLabel(valuationDomain)}</span></div></div>
       <div className="history-toolbar">
         <div className="metric-tabs valuation-tabs" aria-label="Valuation metric">
@@ -198,24 +247,23 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
           </div>
         </div>
       </div>
-      <ValuationHistoryCharts equities={fundamentalEquities} metric={valuationMetric} basis={basis} domain={valuationDomain} />
+		<ValuationHistoryCharts equities={fundamentalEquities} metric={valuationMetric} basis={basis} domain={valuationDomain} zoom={selectedDomain} onZoom={updateDomain} hiddenKeys={hiddenTickers} onHiddenKeys={setHiddenTickers} />
       <div className="section-heading"><div><h2>Monetary context</h2><span>Monthly FRED series / <a href="/monetary/">open full analysis</a></span></div></div>
-      <MacroCharts macro={macro} domain={domain} />
+		<MacroCharts macro={macro} domain={domain} zoom={selectedDomain} onZoom={updateDomain} />
       <div className="section-heading"><div><h2>Current valuation</h2><span>Sortable LTM and internal model snapshot</span></div></div>
       <ValuationMatrix equities={fundamentalEquities} />
       <div className="section-heading"><div><h2>Operating quality</h2><span>Cash conversion, margins, working capital, returns and dilution</span></div></div>
       <div className="metric-tabs quality-tabs" aria-label="Operating quality metric">
         {qualityRows.map((row) => <button type="button" key={row.key} className={qualityMetric === row.key ? "is-active" : ""} onClick={() => setQualityMetric(row.key)}>{row.label}</button>)}
       </div>
-      <QualityHistoryCharts equities={fundamentalEquities} metric={qualityMetric} domain={qualityDomain} />
+		<QualityHistoryCharts equities={fundamentalEquities} metric={qualityMetric} domain={qualityDomain} zoom={selectedDomain} onZoom={updateDomain} hiddenKeys={hiddenTickers} onHiddenKeys={setHiddenTickers} />
       <div className="section-heading compact-heading"><div><h2>Current operating quality</h2><span>Sortable trailing snapshot</span></div></div>
       <QualityMatrix equities={fundamentalEquities} />
       <div className="section-heading"><div><h2>Operating trajectories</h2><span>Annual actuals and estimates</span></div></div>
       <div className="metric-tabs annual-tabs">{metrics.map((key) => <button type="button" key={key} className={metric === key ? "is-active" : ""} onClick={() => onMetric(key)}>{metricLabels[key]}</button>)}</div>
-      <MetricChart equities={fundamentalEquities} metric={metric} />
-      <div className="small-multiples">
-        {metrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={fundamentalEquities} metric={key} compact />)}
-      </div>
+		<MetricChart equities={fundamentalEquities} metric={metric} zoom={selectedDomain} onZoom={updateDomain} hiddenKeys={hiddenTickers} onHiddenKeys={setHiddenTickers} />
+		<div className="pin-toolbar"><button type="button" onClick={pinMetric}><Pin size={13} />{pinnedMetrics.includes(metric) ? "Unpin current chart" : "Pin current chart"}</button><span>{pinnedMetrics.length} pinned</span></div>
+		{pinnedMetrics.filter((key) => key !== metric).length > 0 && <div className="small-multiples pinned-charts">{pinnedMetrics.filter((key) => key !== metric).map((key) => <MetricChart key={key} equities={fundamentalEquities} metric={key} zoom={selectedDomain} onZoom={updateDomain} hiddenKeys={hiddenTickers} onHiddenKeys={setHiddenTickers} compact />)}</div>}
     </section>
   );
 }
@@ -223,6 +271,11 @@ function CompareView({ equities, metric, onMetric, macro }: { equities: Equity[]
 function domainLabel(domain: [number, number]) {
   return `${new Date(domain[0]).getUTCFullYear()}-${new Date(domain[1]).getUTCFullYear()}`;
 }
+function dateInput(value: number) { return new Date(value).toISOString().slice(0, 10); }
+function setDateDomain(value: string, index: 0 | 1, domain: [number, number], update: (domain: [number, number]) => void) { const parsed = Date.parse(`${value}T00:00:00Z`); if (!Number.isFinite(parsed)) return; update(index === 0 ? [parsed, domain[1]] : [domain[0], parsed]); }
+function initialDateDomain(): [number, number] | undefined { const query = new URLSearchParams(window.location.search); const from = Date.parse(`${query.get("from")}T00:00:00Z`); const to = Date.parse(`${query.get("to")}T00:00:00Z`); return Number.isFinite(from) && Number.isFinite(to) && from < to ? [from, to] : undefined; }
+function initialParam<T extends string>(key: string, values: T[], fallback: T) { const value = new URLSearchParams(window.location.search).get(key) as T | null; return value && values.includes(value) ? value : fallback; }
+function loadJSON<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } }
 
 function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
   const peRow = valuationRows[0];
@@ -264,13 +317,13 @@ function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; 
 function MarketOnlyView({ equity }: { equity: Equity }) {
   const latest = equity.prices?.[equity.prices.length - 1];
   const first = equity.prices?.[0];
-  const totalReturn = first && latest && first.close > 0 ? latest.close / first.close - 1 : undefined;
+	const totalReturn = first && latest && returnValue(first) > 0 ? returnValue(latest) / returnValue(first) - 1 : undefined;
   return <>
     <div className="metric-strip market-metric-strip">
       <Metric label="Price" value={money(equity.current.price)} context={equity.current.priceAsOf || "latest close"} />
       <Metric label="1 year" value={percent(equity.current.return1Y)} context="price return" valueTone={tone(equity.current.return1Y)} />
       <Metric label="52 week high" value={money(equity.current.high52Week)} context={equity.current.low52Week === undefined ? "range unavailable" : `Low ${money(equity.current.low52Week)}`} />
-      <Metric label="Full history" value={percent(totalReturn)} context={first ? `since ${first.date.slice(0, 4)}` : "history pending"} valueTone={tone(totalReturn)} />
+			<Metric label="Full-history total return" value={percent(totalReturn)} context={first ? `since ${first.date.slice(0, 4)}` : "history pending"} valueTone={tone(totalReturn)} />
     </div>
     <div className="section-heading"><div><h2>Market history</h2><span>{equity.prices?.length ?? 0} monthly observations</span></div></div>
     <PriceChart equity={equity} />
@@ -280,7 +333,7 @@ function MarketOnlyView({ equity }: { equity: Equity }) {
 function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
   return (
     <section className="view">
-      <div className="view-title"><div><h1>{equity.ticker} <span>valuation models</span></h1><small>{equity.company} · {equity.valuation?.asOf ?? analysisDate(equity)}</small></div></div>
+		<div className="view-title"><div><h1>{equity.ticker} <span>valuation models</span></h1><small>{equity.company} · Fundamentals {equity.valuation?.asOf ?? "pending"} · Price {equity.current.priceAsOf ?? "pending"}</small></div></div>
       {loading && !equity.forecast?.forwardFcfB ? <PendingDetail ticker={equity.ticker} /> : <ValuationWorkbench equity={equity} />}
     </section>
   );

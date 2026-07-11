@@ -6,7 +6,7 @@ const columns: Array<{ key: MatrixSort; label: string; metric?: CountryMetric }>
   { key: "name", label: "Economy" }, { key: "regime", label: "Regime" }, { key: "inflation", label: "Inflation", metric: "inflation" },
   { key: "policyRate", label: "Policy / short", metric: "policyRate" }, { key: "realRate", label: "Real", metric: "realRate" },
   { key: "industrialGrowth", label: "Industry", metric: "industrialGrowth" }, { key: "moneyGrowth", label: "Money", metric: "moneyGrowth" },
-  { key: "longRate", label: "Long", metric: "longRate" }, { key: "yieldCurve", label: "Curve", metric: "yieldCurve" }, { key: "asOf", label: "Latest" },
+	{ key: "longRate", label: "Long", metric: "longRate" }, { key: "yieldCurve", label: "Curve", metric: "yieldCurve" }, { key: "asOf", label: "Common through" },
 ];
 
 export function CountryMatrix({ rows, selected, onSelect, compact = false }: { rows: Snapshot[]; selected?: string; onSelect?: (code: string) => void; compact?: boolean }) {

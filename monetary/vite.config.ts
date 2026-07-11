@@ -20,6 +20,6 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5174,
-    proxy: { "/equities/api": "http://127.0.0.1:8080" },
+    proxy: { "/monetary/api": "http://127.0.0.1:8080" },
   },
 });

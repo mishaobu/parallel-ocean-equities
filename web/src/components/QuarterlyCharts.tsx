@@ -1,5 +1,5 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter } from "../chartInteraction";
 import type { Equity, QuarterlyPoint } from "../types";
 import { formatBillions, quarterLabel } from "../valuationData";
 
@@ -23,10 +23,10 @@ export function QuarterlyChart({ equity, metric }: { equity: Equity; metric: Qua
   const data = recentQuarters(equity).map((row) => ({ timestamp: Date.parse(row.periodEnd), period: quarterLabel(row), value: row[metric] }));
   const domain = timeDomain(data);
   const chart = useChartZoom(domain, 60*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, ["value"], "timestamp", { includeZero: true });
+  const fitted = useFittedYDomain(data, chart.activeDomain, ["value"], "timestamp", { includeZero: true });
   return (
     <div className="chart chart-compact">
-      <div className="chart-heading"><strong>{labels[metric]}</strong><ChartHeadingMeta unit="USD billions / quarter" zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+      <div className="chart-heading"><strong>{labels[metric]}</strong><ChartHeadingMeta unit="USD billions / quarter" zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
       <div className="chart-canvas">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: -8 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
@@ -57,10 +57,10 @@ export function BalanceSheetChart({ equity }: { equity: Equity }) {
   const keys = ["Assets", "Liquidity", "Debt", "Equity"];
   const legend = useLegendFilter(keys);
   const chart = useChartZoom(domain, 60*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "timestamp", { includeZero: true });
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "timestamp", { includeZero: true });
   return (
     <div className="chart chart-wide">
-      <div className="chart-heading"><strong>Balance sheet trajectory</strong><ChartHeadingMeta unit="quarter-end / USD billions" zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+      <div className="chart-heading"><strong>Balance sheet trajectory</strong><ChartHeadingMeta unit="quarter-end / USD billions" zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
       <div className="chart-canvas">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart className="interactive-chart" data={data} margin={{ top: 12, right: 18, bottom: 2, left: 0 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
