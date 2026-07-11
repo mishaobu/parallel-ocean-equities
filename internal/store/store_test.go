@@ -64,6 +64,31 @@ func TestMacroErrorPreservesLastSuccessfulPoints(t *testing.T) {
 	}
 }
 
+func TestMacroRefreshPreservesOptionalEnrichmentWhenAdapterReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.json")
+	state := model.NewState()
+	writeJSON(t, seed, state)
+	store, err := Open(filepath.Join(dir, "state.json"), seed, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := model.MacroSeries{
+		Vintages: model.VintageSeries{Points: []model.VintagePoint{{Date: "2025-01-01", VintageDate: "2024-12-31"}}},
+		Options:  model.OptionsSeries{Snapshots: []model.OptionSnapshot{{Ticker: "SPY"}}},
+	}
+	if err := store.SetMacro(previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMacro(model.MacroSeries{Points: []model.MacroPoint{{Date: "2025-02-01"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := store.Snapshot().Macro
+	if len(got.Vintages.Points) != 1 || len(got.Options.Snapshots) != 1 || len(got.Points) != 1 {
+		t.Fatalf("optional enrichment was not retained: %#v", got)
+	}
+}
+
 func writeJSON(t *testing.T, path string, value any) {
 	t.Helper()
 	data, err := jsonMarshal(value)

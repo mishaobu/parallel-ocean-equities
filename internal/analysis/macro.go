@@ -79,6 +79,10 @@ type MacroAnalyzer interface {
 	Analyze(context.Context) (model.MacroSeries, error)
 }
 
+type IncrementalMacroAnalyzer interface {
+	AnalyzeWithPrevious(context.Context, model.MacroSeries) (model.MacroSeries, error)
+}
+
 type FREDClient struct {
 	baseURL   string
 	http      *http.Client

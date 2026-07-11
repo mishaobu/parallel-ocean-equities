@@ -20,6 +20,19 @@ describe("regime outcomes", () => {
     expect(currentRegime(country)).toBe("Inflationary growth");
   });
 
+  it("prefers recorded ALFRED vintages over revised country history", () => {
+    const points = monthlyDates("2018-01-01", 30);
+    const country: CountrySeries = {
+      code: "US", name: "United States", currency: "USD", region: "Americas", policyLabel: "Fed", fxLabel: "USD",
+      points: points.map((date) => ({ date, inflation: 2, industrialGrowth: 1 })),
+    };
+    const asset: AssetSeries = { symbol: "SPY", label: "US equities", group: "Equities", points: points.map((date, index) => ({ date, close: 100 + index })) };
+    const vintages = [{ date: "2018-01-01", vintageDate: "2017-12-31", inflation: 5, industrialGrowth: -2 }];
+    const stats = regimeOutcomes([asset], country, [Date.parse(points[0]), Date.parse(points.at(-1)!)], vintages);
+    expect(stats.some((row) => row.regime === "Stagflation")).toBe(true);
+    expect(stats.some((row) => row.regime === "Disinflationary growth")).toBe(false);
+  });
+
   it("fits directional factor sensitivities from observations", () => {
     const rows: CalibrationRow[] = Array.from({ length: 72 }, (_, index) => {
       const factors = {

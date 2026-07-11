@@ -6,9 +6,10 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`, w
 
 - SEC Company Facts supplies annual and quarterly statements. Every normalized quarter retains its accession, filing date, form, and SEC filing link; Q4 flow values are derived from the 10-K less Q1-Q3.
 - Yahoo Finance monthly closes provide split-adjusted long-history coverage.
-- ThetaData v3 EOD is retained as a market-data fallback when `THETA_BASE_URL` is configured.
+- ThetaData v3 EOD is retained as a market-data fallback when `THETA_BASE_URL` is configured. The macro options view also uses bounded, sequential ThetaData IV-history requests for selected US underlyings outside a conservative US market-hours window.
 - Polygon resolves ticker CIKs when the SEC ticker map is unavailable and supplies adjusted daily bars when configured.
-- FRED supplies the US macro archive plus normalized monetary histories for the United States, euro area, United Kingdom, Japan, and China. Country metrics retain independent observation dates because publication lags and policy definitions differ.
+- FRED supplies the US macro archive plus normalized monetary histories for the United States, euro area, United Kingdom, Japan, and China. Eurostat and the ECB overlay current euro-area inflation, production, unemployment, and M3; ONS overlays current UK CPI, production, and unemployment. Country metrics retain independent observation dates, and stale or unavailable fields are explicitly warned.
+- ALFRED supplies a persisted quarterly point-in-time CPI and industrial-production archive from 1994. The initial backfill is incremental: completed vintage rows are reused on later refreshes.
 - The market-provider chain supplies monthly histories for regional equities, duration, credit, gold, and the dollar used by the global macro workspace.
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
@@ -25,7 +26,7 @@ Open `http://localhost:8080/equities/`.
 
 The monetary workspace is available at `http://localhost:8080/monetary/`. It uses the same persisted FRED and equity state through the equities API while keeping its own frontend bundle and route. Its views provide dated regime pillars, synchronized/pinnable chart inspection, historical episode comparison, native/change/z-score/percentile transforms, net-liquidity accounting, and release-lagged equity-regime outcomes. Historical FRED observations are latest-revised values rather than ALFRED vintages; the UI states this explicitly.
 
-The macro workspace is available at `http://localhost:8080/macro/`. It combines sortable country regime comparisons, regional policy divergence, indexed cross-asset histories, regime-conditioned forward outcomes, return boards, and calibrated plus structural scenario modes. Drag across any time-series chart to isolate a historical period and refit its axes to the visible observations. Outcome and calibrated-scenario calculations use quarterly-spaced starts with a conservative two-month macro availability lag; historical macro values remain latest-revised rather than ALFRED vintages.
+The macro workspace is available at `http://localhost:8080/macro/`. It combines sortable country regime comparisons, regional policy divergence, indexed cross-asset histories, regime-conditioned forward outcomes, options term structure and skew, return boards, and calibrated plus structural scenario modes. Drag across any time-series chart to isolate a historical period and refit its axes to the visible observations. Outcome calculations prefer the persisted ALFRED vintage available immediately before each quarterly start; they fall back to a conservative two-month lag only when the vintage archive is unavailable.
 
 ## Configuration
 
@@ -36,6 +37,10 @@ The macro workspace is available at `http://localhost:8080/macro/`. It combines 
 | `SEC_USER_AGENT` | app URL | SEC API identification |
 | `FRED_USER_AGENT` | product/version URL | FRED CSV identification |
 | `THETA_BASE_URL` | empty | ThetaTerminal URL, for example `http://theta-service:25503` |
+| `THETA_OPTIONS_ENABLED` | `true` | Enable options enrichment when `THETA_BASE_URL` is configured |
+| `OPTIONS_TICKERS` | core US list | Comma-separated options underlyings; defaults to SPY, QQQ, AMD, NVDA, MU, SMCI, DELL, and BABA |
+| `ALFRED_ENABLED` | `true` | Enable incremental point-in-time US regime vintages |
+| `OFFICIAL_COUNTRY_DATA_ENABLED` | `true` | Enable Eurostat, ECB, and ONS country overlays |
 | `POLYGON_API_KEY` | empty | Market-data fallback |
 | `REFRESH_INTERVAL` | `24h` | In-process refresh cadence |
 | `REFRESH_TOKEN` | empty | Bearer token for `/internal/refresh` |

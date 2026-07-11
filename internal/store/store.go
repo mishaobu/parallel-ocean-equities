@@ -151,6 +151,12 @@ func (s *Store) SetError(ticker string, refreshErr error) error {
 func (s *Store) SetMacro(series model.MacroSeries) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(series.Vintages.Points) == 0 && len(s.state.Macro.Vintages.Points) > 0 {
+		series.Vintages = s.state.Macro.Vintages
+	}
+	if len(series.Options.Snapshots) == 0 && len(s.state.Macro.Options.Snapshots) > 0 {
+		series.Options = s.state.Macro.Options
+	}
 	series.Error = ""
 	if series.UpdatedAt.IsZero() {
 		series.UpdatedAt = time.Now().UTC()

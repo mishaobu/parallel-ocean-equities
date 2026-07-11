@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 7
+const StateVersion = 8
 
 type AnnualPoint struct {
 	FiscalYear     int      `json:"fiscalYear"`
@@ -173,6 +173,56 @@ type MacroSeries struct {
 	Points    []MacroPoint    `json:"points,omitempty"`
 	Countries []CountrySeries `json:"countries,omitempty"`
 	Assets    []AssetSeries   `json:"assets,omitempty"`
+	Vintages  VintageSeries   `json:"vintages,omitempty"`
+	Options   OptionsSeries   `json:"options,omitempty"`
+}
+
+type VintagePoint struct {
+	Date                      string   `json:"date"`
+	VintageDate               string   `json:"vintageDate"`
+	Inflation                 *float64 `json:"inflation,omitempty"`
+	InflationObservationDate  string   `json:"inflationObservationDate,omitempty"`
+	IndustrialGrowth          *float64 `json:"industrialGrowth,omitempty"`
+	IndustrialObservationDate string   `json:"industrialObservationDate,omitempty"`
+}
+
+type VintageSeries struct {
+	UpdatedAt time.Time      `json:"updatedAt,omitempty"`
+	Source    string         `json:"source,omitempty"`
+	Warnings  []string       `json:"warnings,omitempty"`
+	Points    []VintagePoint `json:"points,omitempty"`
+}
+
+type OptionTermPoint struct {
+	Expiration       string   `json:"expiration"`
+	DaysToExpiration int      `json:"daysToExpiration"`
+	Spot             *float64 `json:"spot,omitempty"`
+	ATMIV            *float64 `json:"atmIv,omitempty"`
+	PutWingIV        *float64 `json:"putWingIv,omitempty"`
+	CallWingIV       *float64 `json:"callWingIv,omitempty"`
+	Skew             *float64 `json:"skew,omitempty"`
+	ExpectedMove     *float64 `json:"expectedMove,omitempty"`
+	StraddleMove     *float64 `json:"straddleMove,omitempty"`
+}
+
+type OptionSnapshot struct {
+	Ticker                string            `json:"ticker"`
+	AsOf                  string            `json:"asOf,omitempty"`
+	Spot                  *float64          `json:"spot,omitempty"`
+	RealizedVolatility20D *float64          `json:"realizedVolatility20D,omitempty"`
+	ATMIV30D              *float64          `json:"atmIv30D,omitempty"`
+	Skew30D               *float64          `json:"skew30D,omitempty"`
+	ExpectedMove30D       *float64          `json:"expectedMove30D,omitempty"`
+	ImpliedRealizedSpread *float64          `json:"impliedRealizedSpread,omitempty"`
+	Terms                 []OptionTermPoint `json:"terms,omitempty"`
+}
+
+type OptionsSeries struct {
+	UpdatedAt time.Time        `json:"updatedAt,omitempty"`
+	AsOf      string           `json:"asOf,omitempty"`
+	Source    string           `json:"source,omitempty"`
+	Warnings  []string         `json:"warnings,omitempty"`
+	Snapshots []OptionSnapshot `json:"snapshots,omitempty"`
 }
 
 type CountryPoint struct {

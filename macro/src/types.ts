@@ -34,7 +34,28 @@ export interface MacroSeries {
   updatedAt?: string; sources?: string[]; warnings?: string[]; error?: string; basis?: string;
   points?: MacroPoint[];
   countries?: CountrySeries[]; assets?: AssetSeries[];
+  vintages?: VintageSeries;
+  options?: OptionsSeries;
 }
+
+export interface VintagePoint {
+  date: string; vintageDate: string;
+  inflation?: number; inflationObservationDate?: string;
+  industrialGrowth?: number; industrialObservationDate?: string;
+}
+export interface VintageSeries { updatedAt?: string; source?: string; warnings?: string[]; points?: VintagePoint[] }
+
+export interface OptionTermPoint {
+  expiration: string; daysToExpiration: number; spot?: number; atmIv?: number;
+  putWingIv?: number; callWingIv?: number; skew?: number;
+  expectedMove?: number; straddleMove?: number;
+}
+export interface OptionSnapshot {
+  ticker: string; asOf?: string; spot?: number; realizedVolatility20D?: number; atmIv30D?: number;
+  skew30D?: number; expectedMove30D?: number; impliedRealizedSpread?: number;
+  terms?: OptionTermPoint[];
+}
+export interface OptionsSeries { updatedAt?: string; asOf?: string; source?: string; warnings?: string[]; snapshots?: OptionSnapshot[] }
 
 export interface StateResponse {
   state: { version: number; updatedAt: string; macro?: MacroSeries };

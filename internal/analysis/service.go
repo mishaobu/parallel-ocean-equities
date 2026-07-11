@@ -201,9 +201,15 @@ func (s *Service) refreshMacro(parent context.Context) {
 		s.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 8*time.Minute)
 	defer cancel()
-	series, err := s.macro.Analyze(ctx)
+	var series model.MacroSeries
+	var err error
+	if incremental, ok := s.macro.(IncrementalMacroAnalyzer); ok {
+		series, err = incremental.AnalyzeWithPrevious(ctx, s.store.Snapshot().Macro)
+	} else {
+		series, err = s.macro.Analyze(ctx)
+	}
 	if err != nil {
 		s.macroFailures.Add(1)
 		_ = s.store.SetMacroError(err)

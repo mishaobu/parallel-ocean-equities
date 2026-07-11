@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,15 @@ func main() {
 		analysis.NewFREDClient(env("FRED_USER_AGENT", "parallel-ocean-equities/1.0 (https://parallel-ocean.xyz/equities)"), httpClient),
 		market,
 	)
+	if envBool("OFFICIAL_COUNTRY_DATA_ENABLED", true) {
+		macro.WithOfficialCountries(analysis.NewOfficialCountryClient(nil))
+	}
+	if envBool("ALFRED_ENABLED", true) {
+		macro.WithVintages(analysis.NewALFREDClient(env("FRED_USER_AGENT", "parallel-ocean-equities/1.0 (https://parallel-ocean.xyz/equities)"), nil))
+	}
+	if envBool("THETA_OPTIONS_ENABLED", true) {
+		macro.WithOptions(analysis.NewThetaOptionsClient(os.Getenv("THETA_BASE_URL"), envList("OPTIONS_TICKERS"), nil))
+	}
 	service := analysis.NewService(state, pipeline).WithMacro(macro)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -124,4 +134,12 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func envList(key string) []string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
 }

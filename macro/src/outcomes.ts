@@ -1,5 +1,5 @@
 import type { ScenarioInputs } from "./data";
-import type { AssetSeries, CountryPoint, CountrySeries, MacroPoint, PricePoint } from "./types";
+import type { AssetSeries, CountryPoint, CountrySeries, MacroPoint, PricePoint, VintagePoint } from "./types";
 
 export const regimes = ["Inflationary growth", "Stagflation", "Disinflationary slowdown", "Disinflationary growth"] as const;
 export type Regime = typeof regimes[number];
@@ -37,9 +37,9 @@ export interface OutcomeStat {
   endDate: string;
 }
 
-export function regimeOutcomes(assets: AssetSeries[], country: CountrySeries | undefined, domain: [number, number]): OutcomeStat[] {
+export function regimeOutcomes(assets: AssetSeries[], country: CountrySeries | undefined, domain: [number, number], vintages: VintagePoint[] = []): OutcomeStat[] {
   if (!country) return [];
-  const observations = assets.flatMap((asset) => assetObservations(asset, country.points ?? [], domain));
+  const observations = assets.flatMap((asset) => assetObservations(asset, country.points ?? [], domain, vintages));
   const grouped = new Map<string, OutcomeObservation[]>();
   observations.forEach((observation) => {
     const key = `${observation.symbol}|${observation.regime}|${observation.horizon}`;
@@ -66,7 +66,7 @@ export function classifyRegime(inflation: number, growth: number): Regime {
   return "Disinflationary growth";
 }
 
-function assetObservations(asset: AssetSeries, macro: CountryPoint[], domain: [number, number]): OutcomeObservation[] {
+function assetObservations(asset: AssetSeries, macro: CountryPoint[], domain: [number, number], vintages: VintagePoint[]): OutcomeObservation[] {
   const prices = [...(asset.points ?? [])].filter((point) => point.close > 0).sort((left, right) => left.date.localeCompare(right.date));
   const observations: OutcomeObservation[] = [];
   let lastStart = -Infinity;
@@ -74,8 +74,7 @@ function assetObservations(asset: AssetSeries, macro: CountryPoint[], domain: [n
     const start = prices[index];
     const startTime = Date.parse(start.date);
     if (startTime < domain[0] || startTime > domain[1] || monthDistance(lastStart, startTime) < 3) continue;
-    const availableAt = addMonths(startTime, -2);
-    const macroPoint = pointAtOrBefore(macro, availableAt);
+    const macroPoint = vintages.length ? pointAtOrBefore(vintages, startTime) : pointAtOrBefore(macro, addMonths(startTime, -2));
     if (!macroPoint || !finite(macroPoint.inflation) || !finite(macroPoint.industrialGrowth)) continue;
     let sampled = false;
     for (const horizon of [3, 6, 12] as ForwardHorizon[]) {
@@ -228,7 +227,7 @@ function factorObject(factory: (key: keyof ScenarioInputs) => number): ScenarioI
   return { growth: factory("growth"), inflation: factory("inflation"), realRate: factory("realRate"), dollar: factory("dollar"), liquidity: factory("liquidity") };
 }
 
-function pointAtOrBefore(points: CountryPoint[], timestamp: number) {
+function pointAtOrBefore<T extends { date: string }>(points: T[], timestamp: number) {
   const index = indexAtOrBefore(points, timestamp);
   return index < 0 ? undefined : points[index];
 }

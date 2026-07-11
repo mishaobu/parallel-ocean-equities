@@ -184,8 +184,11 @@ func dateIfValue(date string, value *float64) string {
 }
 
 type MacroPipeline struct {
-	Macro  MacroAnalyzer
-	Market MarketProvider
+	Macro     MacroAnalyzer
+	Market    MarketProvider
+	Vintages  *ALFREDClient
+	Options   *ThetaOptionsClient
+	Countries *OfficialCountryClient
 }
 
 var macroAssetSpecs = []struct{ symbol, label, group, region string }{
@@ -207,10 +210,56 @@ func NewMacroPipeline(macro MacroAnalyzer, market MarketProvider) *MacroPipeline
 	return &MacroPipeline{Macro: macro, Market: market}
 }
 
+func (p *MacroPipeline) WithVintages(client *ALFREDClient) *MacroPipeline {
+	p.Vintages = client
+	return p
+}
+
+func (p *MacroPipeline) WithOptions(client *ThetaOptionsClient) *MacroPipeline {
+	p.Options = client
+	return p
+}
+
+func (p *MacroPipeline) WithOfficialCountries(client *OfficialCountryClient) *MacroPipeline {
+	p.Countries = client
+	return p
+}
+
 func (p *MacroPipeline) Analyze(ctx context.Context) (model.MacroSeries, error) {
+	return p.AnalyzeWithPrevious(ctx, model.MacroSeries{})
+}
+
+func (p *MacroPipeline) AnalyzeWithPrevious(ctx context.Context, previous model.MacroSeries) (model.MacroSeries, error) {
 	series, err := p.Macro.Analyze(ctx)
-	if err != nil || p.Market == nil {
+	if err != nil {
 		return series, err
+	}
+	if p.Vintages != nil {
+		vintages, vintageErr := p.Vintages.Analyze(ctx, previous.Vintages)
+		if vintageErr != nil {
+			series.Warnings = append(series.Warnings, vintageErr.Error())
+			series.Vintages = previous.Vintages
+		} else {
+			series.Vintages = vintages
+		}
+	}
+	if p.Countries != nil {
+		countries, countryWarnings := p.Countries.Enrich(ctx, series.Countries)
+		series.Countries = countries
+		series.Warnings = append(series.Warnings, countryWarnings...)
+	}
+	if p.Options != nil {
+		options, optionsErr := p.Options.Analyze(ctx, previous.Options)
+		if optionsErr != nil {
+			series.Warnings = append(series.Warnings, optionsErr.Error())
+			series.Options = previous.Options
+		} else {
+			series.Options = options
+		}
+	}
+	if p.Market == nil {
+		sort.Strings(series.Warnings)
+		return series, nil
 	}
 	type result struct {
 		asset model.AssetSeries
