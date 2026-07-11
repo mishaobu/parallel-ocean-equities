@@ -49,6 +49,10 @@ main { max-width: 1580px; margin: 0 auto; padding: 24px 26px 60px; }
 .chart-primary .chart-body { height: 420px; }
 .chart-empty { height: 100%; display: grid; place-items: center; color: #69756d; font-size: 10px; }
 .series-chart-panel .chart-body { cursor: crosshair; user-select: none; }
+.chart-gesture-surface { touch-action: pan-y; }
+@media (pointer: coarse) {
+  .series-chart-panel .chart-body { cursor: default; }
+}
 .chart-region-control { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; }
 .chart-region-control > span { margin: 0; color: #68756d; font-size: 7px; font-weight: 700; white-space: nowrap; }
 .chart-region-control .icon-button { width: 27px; height: 27px; }

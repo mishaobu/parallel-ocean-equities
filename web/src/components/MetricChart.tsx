@@ -27,7 +27,7 @@ export function MetricChart({ equities, metric, compact = false, zoom, onZoom, h
         <strong>{metricLabels[metric]}</strong>
         <ChartHeadingMeta unit={metric === "dilutedEps" ? "USD / share" : metric === "peRatio" ? "multiple" : "USD billions"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} mode="year" />
       </div>
-      <div className="chart-canvas">
+      <div className="chart-canvas chart-gesture-surface" {...chart.touchHandlers}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 16, bottom: 2, left: compact ? -12 : 0 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
             <CartesianGrid vertical={false} stroke="#e5e9e6" />

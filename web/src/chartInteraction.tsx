@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { CircleAlert, RotateCcw } from "lucide-react";
 
 export interface ChartPointer { activeLabel?: string | number }
 export interface SharedChartRange { zoom?: [number, number]; onZoom?: (zoom?: [number, number]) => void }
 export interface SharedLegendFilter { hiddenKeys?: Set<string>; onHiddenKeys?: (hidden: Set<string>) => void }
+export interface TouchPoint { clientX: number }
+export interface TouchBounds { left: number; width: number }
 
 export function useChartZoom(domain: [number, number], minimumSpan: number, controlledZoom?: [number, number], onZoom?: (zoom?: [number, number]) => void) {
   const [localZoom, setLocalZoom] = useState<[number, number]>();
   const [selection, setSelection] = useState<[number, number]>();
   const selectionRef = useRef<[number, number]>();
+  const ignoreMouseUntil = useRef(0);
   const controlled = onZoom !== undefined;
   const zoom = controlled ? controlledZoom : localZoom;
   useEffect(() => {
@@ -18,18 +21,24 @@ export function useChartZoom(domain: [number, number], minimumSpan: number, cont
   }, [domain[0], domain[1]]);
 
   function start(event: ChartPointer) {
+    if (Date.now() < ignoreMouseUntil.current) return;
     const value = eventCoordinate(event);
     if (value === undefined) return;
     selectionRef.current = [value, value];
     setSelection(selectionRef.current);
   }
   function move(event: ChartPointer) {
+    if (Date.now() < ignoreMouseUntil.current) return;
     const value = eventCoordinate(event);
     if (value === undefined || !selectionRef.current) return;
     selectionRef.current = [selectionRef.current[0], value];
     setSelection(selectionRef.current);
   }
   function finish() {
+    if (Date.now() < ignoreMouseUntil.current) return;
+    commitSelection();
+  }
+  function commitSelection() {
     const current = selectionRef.current;
     if (!current) return;
     const ordered: [number, number] = current[0] <= current[1] ? current : [current[1], current[0]];
@@ -40,7 +49,61 @@ export function useChartZoom(domain: [number, number], minimumSpan: number, cont
     selectionRef.current = undefined;
     setSelection(undefined);
   }
-  return { activeDomain: zoom ?? domain, zoom, selection, start, move, finish, reset: () => controlled ? onZoom?.(undefined) : setLocalZoom(undefined) };
+  function updateTouchSelection(event: TouchEvent<HTMLElement>) {
+    ignoreMouseUntil.current = Date.now() + 800;
+    const next = touchDomainRange(domain, touchPoints(event.touches), plotBounds(event.currentTarget));
+    if (!next) {
+      selectionRef.current = undefined;
+      setSelection(undefined);
+      return;
+    }
+    if (event.cancelable) event.preventDefault();
+    selectionRef.current = next;
+    setSelection(next);
+  }
+  function finishTouch(event: TouchEvent<HTMLElement>) {
+    ignoreMouseUntil.current = Date.now() + 800;
+    if (!selectionRef.current) return;
+    if (event.cancelable) event.preventDefault();
+    commitSelection();
+  }
+  function cancelTouch() {
+    selectionRef.current = undefined;
+    setSelection(undefined);
+  }
+  return {
+    activeDomain: zoom ?? domain,
+    zoom,
+    selection,
+    start,
+    move,
+    finish,
+    touchHandlers: { onTouchStart: updateTouchSelection, onTouchMove: updateTouchSelection, onTouchEnd: finishTouch, onTouchCancel: cancelTouch },
+    reset: () => controlled ? onZoom?.(undefined) : setLocalZoom(undefined),
+  };
+}
+
+export function touchDomainRange(domain: [number, number], touches: TouchPoint[], bounds: TouchBounds): [number, number] | undefined {
+  if (touches.length < 2 || !Number.isFinite(bounds.width) || bounds.width <= 0) return undefined;
+  const value = (clientX: number) => {
+    const ratio = Math.min(1, Math.max(0, (clientX - bounds.left) / bounds.width));
+    return domain[0] + ratio * (domain[1] - domain[0]);
+  };
+  const first = value(touches[0].clientX);
+  const second = value(touches[1].clientX);
+  return first <= second ? [first, second] : [second, first];
+}
+
+function touchPoints(touches: TouchEvent<HTMLElement>["touches"]) {
+  const points: TouchPoint[] = [];
+  for (let index = 0; index < Math.min(touches.length, 2); index++) points.push({ clientX: touches[index].clientX });
+  return points;
+}
+
+function plotBounds(element: HTMLElement): TouchBounds {
+  const plot = element.querySelector<SVGGraphicsElement>(".recharts-cartesian-grid");
+  const rect = plot?.getBoundingClientRect() ?? element.getBoundingClientRect();
+  return { left: rect.left, width: rect.width };
 }
 
 export function useLegendFilter(keys: string[], controlledHidden?: Set<string>, onHiddenKeys?: (hidden: Set<string>) => void) {

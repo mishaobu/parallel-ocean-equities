@@ -66,7 +66,7 @@ function MacroChart({ panel, data, domain, zoom, onZoom }: { panel: typeof panel
   const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: panel.zero });
   return <div className="chart chart-compact macro-chart">
     <div className="chart-heading"><strong>{panel.title}</strong><ChartHeadingMeta unit={panel.unit === "log" ? "log10 / USD billions" : "percent"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
-    <div className="chart-canvas"><ResponsiveContainer width="100%" height="100%">
+    <div className="chart-canvas chart-gesture-surface" {...chart.touchHandlers}><ResponsiveContainer width="100%" height="100%">
       <LineChart className="interactive-chart" data={data} margin={{ top: 12, right: 16, bottom: 2, left: -6 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
         <CartesianGrid vertical={false} stroke="#e5e9e6" />
         <XAxis dataKey="date" type="number" scale="time" domain={chart.activeDomain} allowDataOverflow tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={30} />

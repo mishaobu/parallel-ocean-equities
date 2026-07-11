@@ -30,7 +30,7 @@ function ValuationHistoryChart({ equities, metric, basis, domain, compact = fals
         <strong>{metric.label}</strong>
         <ChartHeadingMeta unit={`${basis === "actual" ? "LTM at filing" : "Next 12m realized"} / ${metric.kind === "yield" ? "percent" : "multiple"}`} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} />
       </div>
-      <div className="chart-canvas">
+      <div className="chart-canvas chart-gesture-surface" {...chart.touchHandlers}>
         {data.length === 0 ? <ChartEmpty /> : <ResponsiveContainer width="100%" height="100%">
           <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 18, bottom: 2, left: compact ? -10 : 2 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
             <CartesianGrid vertical={false} stroke="#e5e9e6" />

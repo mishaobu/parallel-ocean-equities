@@ -19,7 +19,7 @@ function QualityHistoryChart({ equities, metric, domain, compact = false, zoom, 
   const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "percent" });
   return <div className={`chart history-chart${compact ? " chart-compact" : " chart-primary"}`}>
     <div className="chart-heading"><strong>{metric.label}</strong><ChartHeadingMeta unit={metric.kind === "percent" ? "LTM / percent" : metric.kind === "days" ? "LTM / days" : "LTM / multiple"} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
-    <div className="chart-canvas">{data.length === 0 ? <div className="chart-empty">Operating-quality history unavailable</div> : <ResponsiveContainer width="100%" height="100%">
+    <div className="chart-canvas chart-gesture-surface" {...chart.touchHandlers}>{data.length === 0 ? <div className="chart-empty">Operating-quality history unavailable</div> : <ResponsiveContainer width="100%" height="100%">
       <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 18, bottom: 2, left: compact ? -10 : 2 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>
         <CartesianGrid vertical={false} stroke="#e5e9e6" />
         <XAxis dataKey="date" type="number" scale="time" domain={chart.activeDomain} allowDataOverflow tickFormatter={yearLabel} tick={{ fill: "#66736b", fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={32} />

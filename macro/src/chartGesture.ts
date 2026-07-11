@@ -1,21 +1,16 @@
 import { useRef, useState, type TouchEvent } from "react";
 
-export interface RangeInteraction {
-  rangeSelected?: boolean;
-  onSelectDomain?: (domain: [number, number]) => void;
-  onResetDomain?: () => void;
-}
 export interface TouchPoint { clientX: number }
 export interface TouchBounds { left: number; width: number }
 
-export function useRangeSelection(domain: [number, number], onSelect: ((domain: [number, number]) => void) | undefined, onPin?: (date: number) => void) {
+export function useRangeSelection(domain: [number, number], onSelect?: (domain: [number, number]) => void) {
   const [selection, setSelection] = useState<[number, number]>();
   const selectionRef = useRef<[number, number]>();
   const ignoreMouseUntil = useRef(0);
 
   function start(event: unknown) {
     if (Date.now() < ignoreMouseUntil.current) return;
-    const value = eventDate(event);
+    const value = eventTimestamp(event);
     if (value === undefined) return;
     selectionRef.current = [value, value];
     setSelection(selectionRef.current);
@@ -23,7 +18,7 @@ export function useRangeSelection(domain: [number, number], onSelect: ((domain: 
 
   function move(event: unknown) {
     if (Date.now() < ignoreMouseUntil.current) return;
-    const value = eventDate(event);
+    const value = eventTimestamp(event);
     if (value === undefined || !selectionRef.current) return;
     selectionRef.current = [selectionRef.current[0], value];
     setSelection(selectionRef.current);
@@ -31,10 +26,10 @@ export function useRangeSelection(domain: [number, number], onSelect: ((domain: 
 
   function finish() {
     if (Date.now() < ignoreMouseUntil.current) return;
-    commitSelection(true);
+    commitSelection();
   }
 
-  function commitSelection(allowPin: boolean) {
+  function commitSelection() {
     const current = selectionRef.current;
     selectionRef.current = undefined;
     setSelection(undefined);
@@ -42,8 +37,6 @@ export function useRangeSelection(domain: [number, number], onSelect: ((domain: 
     const next: [number, number] = current[0] <= current[1] ? current : [current[1], current[0]];
     if (next[1] - next[0] >= 20 * 24 * 60 * 60 * 1000) {
       onSelect?.([Math.max(domain[0], next[0]), Math.min(domain[1], next[1])]);
-    } else if (allowPin) {
-      onPin?.(next[1]);
     }
   }
 
@@ -64,7 +57,7 @@ export function useRangeSelection(domain: [number, number], onSelect: ((domain: 
     ignoreMouseUntil.current = Date.now() + 800;
     if (!selectionRef.current) return;
     if (event.cancelable) event.preventDefault();
-    commitSelection(false);
+    commitSelection();
   }
 
   function cancelTouch() {
@@ -104,7 +97,7 @@ function plotBounds(element: HTMLElement): TouchBounds {
   return { left: rect.left, width: rect.width };
 }
 
-export function eventDate(event: unknown) {
+function eventTimestamp(event: unknown) {
   if (!event || typeof event !== "object" || !("activeLabel" in event)) return undefined;
   const value = Number((event as { activeLabel?: unknown }).activeLabel);
   return Number.isFinite(value) ? value : undefined;

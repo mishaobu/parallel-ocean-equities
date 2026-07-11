@@ -1,14 +1,14 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import type { Snapshot } from "../data";
+import { useRangeSelection } from "../chartGesture";
 
 export interface LineSpec { key: string; label: string; color: string; axis?: "left" | "right" }
 export interface RangeInteraction { rangeSelected?: boolean; onSelectDomain?: (domain: [number, number]) => void; onResetDomain?: () => void }
 export function SeriesChart({ title, note, rows, domain, series, unit = "percent", primary = false, rangeSelected, onSelectDomain, onResetDomain }: { title: string; note: string; rows: Array<Record<string, string | number>>; domain: [number, number]; series: LineSpec[]; unit?: "percent" | "index"; primary?: boolean } & RangeInteraction) {
 	const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-	const [selection, setSelection] = useState<[number, number]>();
-	const selectionRef = useRef<[number, number]>();
+	const range = useRangeSelection(domain, onSelectDomain);
 	const activeDomain = domain;
   const hasRight = series.some((item) => item.axis === "right");
   const hasData = rows.some((row) => series.some((item) => typeof row[item.key] === "number"));
@@ -16,20 +16,9 @@ export function SeriesChart({ title, note, rows, domain, series, unit = "percent
   const leftDomain = useMemo(() => fittedYDomain(rows, activeDomain, visible.filter((item) => item.axis !== "right").map((item) => item.key)), [activeDomain, rows, visible]);
   const rightDomain = useMemo(() => fittedYDomain(rows, activeDomain, visible.filter((item) => item.axis === "right").map((item) => item.key)), [activeDomain, rows, visible]);
 
-  function startRegion(event: ChartPointer) { const value = eventTimestamp(event); if (value !== undefined) { selectionRef.current = [value, value]; setSelection(selectionRef.current); } }
-  function moveRegion(event: ChartPointer) { const value = eventTimestamp(event); if (value !== undefined && selectionRef.current) { selectionRef.current = [selectionRef.current[0], value]; setSelection(selectionRef.current); } }
-  function finishRegion() {
-    const current = selectionRef.current;
-    if (!current) return;
-    const next: [number, number] = current[0] <= current[1] ? current : [current[1], current[0]];
-		if (next[1] - next[0] >= 20 * 24 * 60 * 60 * 1000) onSelectDomain?.([Math.max(domain[0], next[0]), Math.min(domain[1], next[1])]);
-    selectionRef.current = undefined;
-    setSelection(undefined);
-  }
-
-	const aside = <div className="chart-region-control"><span>{rangeSelected ? `${shortDate(domain[0])} - ${shortDate(domain[1])}` : "Drag plot to fit period"}</span>{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}</div>;
-  return <article className={`panel chart-panel series-chart-panel${primary ? " chart-primary" : ""}`}><PanelHeader title={title} note={note} aside={aside} /><div className="chart-body">
-    {!hasData ? <div className="chart-empty">Series unavailable for selected range</div> : <ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 16, right: 6, bottom: 3, left: 0 }} onMouseDown={startRegion} onMouseMove={moveRegion} onMouseUp={finishRegion} onMouseLeave={finishRegion}>
+	const aside = <div className="chart-region-control"><span>{rangeSelected ? `${shortDate(domain[0])} - ${shortDate(domain[1])}` : "Full period"}</span>{rangeSelected && <button type="button" className="icon-button" title="Reset selected period" onClick={onResetDomain}><RotateCcw size={13} /></button>}</div>;
+  return <article className={`panel chart-panel series-chart-panel${primary ? " chart-primary" : ""}`}><PanelHeader title={title} note={note} aside={aside} /><div className="chart-body chart-gesture-surface" {...range.touchHandlers}>
+    {!hasData ? <div className="chart-empty">Series unavailable for selected range</div> : <ResponsiveContainer width="100%" height="100%"><LineChart data={rows} margin={{ top: 16, right: 6, bottom: 3, left: 0 }} onMouseDown={range.start} onMouseMove={range.move} onMouseUp={range.finish} onMouseLeave={range.finish}>
       <CartesianGrid vertical={false} stroke="#e2e7e3" />
       <XAxis dataKey="timestamp" type="number" scale="time" domain={activeDomain} allowDataOverflow tickFormatter={(value) => String(new Date(value).getUTCFullYear())} tick={{ fill: "#68746d", fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={42} />
       <YAxis yAxisId="left" domain={leftDomain} allowDataOverflow tickFormatter={(value) => axisValue(Number(value), unit)} tick={{ fill: "#68746d", fontSize: 10 }} axisLine={false} tickLine={false} width={50} />
@@ -37,7 +26,7 @@ export function SeriesChart({ title, note, rows, domain, series, unit = "percent
       <Tooltip itemSorter={(item) => -(Number(item.value) || 0)} labelFormatter={(value) => dateLabel(Number(value))} formatter={(value, name) => [tooltipValue(Number(value), unit), name]} contentStyle={{ border: "1px solid #c9d2cb", borderRadius: 3, fontSize: 11 }} />
       <Legend iconType="line" wrapperStyle={{ fontSize: 10, cursor: "pointer" }} onClick={(event) => { const key = String(event.dataKey ?? ""); if (!key) return; setHidden((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }} />
       {unit === "percent" && <ReferenceLine yAxisId="left" y={0} stroke="#aab5ad" />}
-      {selection && <ReferenceArea yAxisId="left" x1={selection[0]} x2={selection[1]} fill="#7a9b88" fillOpacity={0.16} strokeOpacity={0} />}
+      {range.selection && <ReferenceArea yAxisId="left" x1={range.selection[0]} x2={range.selection[1]} fill="#7a9b88" fillOpacity={0.16} strokeOpacity={0} />}
       {series.map((item) => <Line key={item.key} yAxisId={item.axis ?? "left"} type="monotone" dataKey={item.key} name={item.label} stroke={item.color} strokeWidth={2} dot={false} connectNulls hide={hidden.has(item.key)} isAnimationActive={false} />)}
     </LineChart></ResponsiveContainer>}
   </div></article>;
@@ -73,8 +62,6 @@ export function fittedYDomain(rows: Array<Record<string, string | number>>, doma
   const padding = high === low ? Math.max(Math.abs(high) * .05, .5) : (high - low) * .08;
   return [low - padding, high + padding];
 }
-interface ChartPointer { activeLabel?: string | number }
-function eventTimestamp(event: ChartPointer) { const value = Number(event?.activeLabel); return Number.isFinite(value) ? value : undefined; }
 function axisValue(value: number, unit: string) { return unit === "percent" ? `${value.toFixed(Math.abs(value) < 10 ? 1 : 0)}%` : Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function tooltipValue(value: number, unit: string) { return unit === "percent" ? `${value.toFixed(2)}%` : value.toFixed(1); }
 function dateLabel(value: number) { return new Date(value).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }); }
