@@ -215,7 +215,7 @@ function domainLabel(domain: [number, number]) {
 function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
   const peRow = valuationRows[0];
   const ebitdaRow = valuationRows[1];
-  const fcfRow = valuationRows[3];
+  const fcfRow = valuationRows.find((row) => row.key === "fcf-market-cap") ?? valuationRows[0];
   return (
     <section className="view">
       <TickerTitle equity={equity} onRefresh={onRefresh} onRemove={onRemove} />

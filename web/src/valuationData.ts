@@ -1,6 +1,6 @@
 import type { QuarterlyPoint, ValuationMetrics, ValuationPoint } from "./types";
 
-export type ValuationMetricKey = "pe" | "ev-ebitda" | "ev-ebit" | "fcf-market-cap" | "fcf-ev" | "net-debt-ebitda" | "dividend-fcf";
+export type ValuationMetricKey = "pe" | "ev-ebitda" | "ev-ebit" | "ocf-market-cap" | "fcf-market-cap" | "fcf-ev" | "net-debt-ebitda" | "dividend-fcf";
 
 export interface ValuationRow {
   key: ValuationMetricKey;
@@ -14,6 +14,7 @@ export const valuationRows: ValuationRow[] = [
   { key: "pe", label: "P/E", actual: "pe", forward: "forwardPe", kind: "multiple" },
   { key: "ev-ebitda", label: "EV / EBITDA", actual: "evToEbitda", forward: "forwardEvToEbitda", kind: "multiple" },
   { key: "ev-ebit", label: "EV / EBIT", actual: "evToEbit", forward: "forwardEvToEbit", kind: "multiple" },
+  { key: "ocf-market-cap", label: "OCF / market cap", actual: "operatingCashToMarketCap", forward: "forwardOperatingCashToMarketCap", kind: "yield" },
   { key: "fcf-market-cap", label: "FCF / market cap", actual: "fcfToMarketCap", forward: "forwardFcfToMarketCap", kind: "yield" },
   { key: "fcf-ev", label: "FCF / EV", actual: "fcfToEv", forward: "forwardFcfToEv", kind: "yield" },
   { key: "net-debt-ebitda", label: "Net debt / EBITDA", actual: "netDebtToEbitda", forward: "forwardNetDebtToEbitda", kind: "leverage" },

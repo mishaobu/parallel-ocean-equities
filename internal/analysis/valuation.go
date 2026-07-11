@@ -67,14 +67,15 @@ func enrichValuationHistory(equity *model.Equity, prices []model.PricePoint) {
 	}
 	valuation := equity.Valuation
 	equity.Valuations = append(equity.Valuations, model.ValuationPoint{
-		Date:            currentDate,
-		PE:              valuation.PE,
-		EVToEBITDA:      valuation.EVToEBITDA,
-		EVToEBIT:        valuation.EVToEBIT,
-		FCFToMarketCap:  valuation.FCFToMarketCap,
-		FCFToEV:         valuation.FCFToEV,
-		NetDebtToEBITDA: valuation.NetDebtToEBITDA,
-		DividendToFCF:   valuation.DividendToFCF,
+		Date:                     currentDate,
+		PE:                       valuation.PE,
+		EVToEBITDA:               valuation.EVToEBITDA,
+		EVToEBIT:                 valuation.EVToEBIT,
+		OperatingCashToMarketCap: valuation.OperatingCashToMarketCap,
+		FCFToMarketCap:           valuation.FCFToMarketCap,
+		FCFToEV:                  valuation.FCFToEV,
+		NetDebtToEBITDA:          valuation.NetDebtToEBITDA,
+		DividendToFCF:            valuation.DividendToFCF,
 	})
 }
 
@@ -170,14 +171,15 @@ func historicalAnnualValuationPoint(date string, price float64, trailing model.A
 		enterpriseValue = floatPtr(*marketCap + *netDebt)
 	}
 	point := model.ValuationPoint{
-		Date:            date,
-		PE:              meaningfulMultiple(marketCap, trailing.NetIncomeB),
-		EVToEBITDA:      meaningfulMultiple(enterpriseValue, trailing.EBITDAB),
-		EVToEBIT:        meaningfulMultiple(enterpriseValue, trailing.EBITB),
-		FCFToMarketCap:  ratio(trailing.FCFB, marketCap),
-		FCFToEV:         ratio(trailing.FCFB, enterpriseValue),
-		NetDebtToEBITDA: ratio(netDebt, trailing.EBITDAB),
-		DividendToFCF:   ratio(trailing.DividendsB, trailing.FCFB),
+		Date:                     date,
+		PE:                       meaningfulMultiple(marketCap, trailing.NetIncomeB),
+		EVToEBITDA:               meaningfulMultiple(enterpriseValue, trailing.EBITDAB),
+		EVToEBIT:                 meaningfulMultiple(enterpriseValue, trailing.EBITB),
+		OperatingCashToMarketCap: ratio(trailing.OperatingCashB, marketCap),
+		FCFToMarketCap:           ratio(trailing.FCFB, marketCap),
+		FCFToEV:                  ratio(trailing.FCFB, enterpriseValue),
+		NetDebtToEBITDA:          ratio(netDebt, trailing.EBITDAB),
+		DividendToFCF:            ratio(trailing.DividendsB, trailing.FCFB),
 	}
 	if forward == nil {
 		return point
@@ -185,6 +187,7 @@ func historicalAnnualValuationPoint(date string, price float64, trailing model.A
 	point.ForwardPE = meaningfulMultiple(marketCap, forward.NetIncomeB)
 	point.ForwardEVToEBITDA = meaningfulMultiple(enterpriseValue, forward.EBITDAB)
 	point.ForwardEVToEBIT = meaningfulMultiple(enterpriseValue, forward.EBITB)
+	point.ForwardOperatingCashToMarketCap = ratio(forward.OperatingCashB, marketCap)
 	point.ForwardFCFToMarketCap = ratio(forward.FCFB, marketCap)
 	point.ForwardFCFToEV = ratio(forward.FCFB, enterpriseValue)
 	point.ForwardNetDebtToEBITDA = ratio(netDebt, forward.EBITDAB)
@@ -224,10 +227,12 @@ func historicalValuationPoint(date string, price float64, trailing, forward []mo
 	point.PE = meaningfulMultiple(marketCap, trailingNetIncome)
 	trailingEBITDA := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.EBITDAB })
 	trailingEBIT := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.EBITB })
+	trailingOperatingCash := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.OperatingCashB })
 	trailingFCF := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.FCFB })
 	trailingDividends := sumQuarterValues(trailing, func(row model.QuarterlyPoint) *float64 { return row.DividendsB })
 	point.EVToEBITDA = meaningfulMultiple(enterpriseValue, trailingEBITDA)
 	point.EVToEBIT = meaningfulMultiple(enterpriseValue, trailingEBIT)
+	point.OperatingCashToMarketCap = ratio(trailingOperatingCash, marketCap)
 	point.FCFToMarketCap = ratio(trailingFCF, marketCap)
 	point.FCFToEV = ratio(trailingFCF, enterpriseValue)
 	point.NetDebtToEBITDA = ratio(netDebt, trailingEBITDA)
@@ -240,10 +245,12 @@ func historicalValuationPoint(date string, price float64, trailing, forward []mo
 	point.ForwardPE = meaningfulMultiple(marketCap, forwardNetIncome)
 	forwardEBITDA := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.EBITDAB })
 	forwardEBIT := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.EBITB })
+	forwardOperatingCash := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.OperatingCashB })
 	forwardFCF := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.FCFB })
 	forwardDividends := sumQuarterValues(forward, func(row model.QuarterlyPoint) *float64 { return row.DividendsB })
 	point.ForwardEVToEBITDA = meaningfulMultiple(enterpriseValue, forwardEBITDA)
 	point.ForwardEVToEBIT = meaningfulMultiple(enterpriseValue, forwardEBIT)
+	point.ForwardOperatingCashToMarketCap = ratio(forwardOperatingCash, marketCap)
 	point.ForwardFCFToMarketCap = ratio(forwardFCF, marketCap)
 	point.ForwardFCFToEV = ratio(forwardFCF, enterpriseValue)
 	point.ForwardNetDebtToEBITDA = ratio(netDebt, forwardEBITDA)
@@ -276,6 +283,7 @@ func enrichValuation(equity *model.Equity) {
 	ttmRevenue := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.RevenueB })
 	ttmEBITDA := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.EBITDAB })
 	ttmEBIT := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.EBITB })
+	ttmOperatingCash := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.OperatingCashB })
 	ttmFCF := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.FCFB })
 	ttmNetIncome := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.NetIncomeB })
 	ttmDividends := sumQuarterValues(recent, func(row model.QuarterlyPoint) *float64 { return row.DividendsB })
@@ -284,15 +292,16 @@ func enrichValuation(equity *model.Equity) {
 	netDebt := latestQuarterValue(recent, func(row model.QuarterlyPoint) *float64 { return row.NetDebtB })
 
 	valuation := model.ValuationMetrics{
-		AsOf:           recent[len(recent)-1].PeriodEnd,
-		TTMRevenueB:    ttmRevenue,
-		TTMEBITDAB:     ttmEBITDA,
-		TTMEBITB:       ttmEBIT,
-		TTMFCFB:        ttmFCF,
-		TTMNetIncomeB:  ttmNetIncome,
-		TTMDividendsB:  ttmDividends,
-		NetDebtB:       netDebt,
-		DilutedSharesB: shares,
+		AsOf:              recent[len(recent)-1].PeriodEnd,
+		TTMRevenueB:       ttmRevenue,
+		TTMEBITDAB:        ttmEBITDA,
+		TTMEBITB:          ttmEBIT,
+		TTMOperatingCashB: ttmOperatingCash,
+		TTMFCFB:           ttmFCF,
+		TTMNetIncomeB:     ttmNetIncome,
+		TTMDividendsB:     ttmDividends,
+		NetDebtB:          netDebt,
+		DilutedSharesB:    shares,
 	}
 
 	if ttmEPS != nil {
@@ -309,7 +318,7 @@ func enrichValuation(equity *model.Equity) {
 		equity.Current.TrailingPE = valuation.PE
 	}
 
-	forecast := buildForecast(equity, recent, previous, ttmRevenue, ttmEBIT, ttmEBITDA, ttmFCF, ttmNetIncome, ttmDividends, ttmEPS)
+	forecast := buildForecast(equity, recent, previous, ttmRevenue, ttmEBIT, ttmEBITDA, ttmOperatingCash, ttmFCF, ttmNetIncome, ttmDividends, ttmEPS)
 	if forecast.ForwardEPS != nil {
 		equity.Current.ForwardEPS = forecast.ForwardEPS
 	}
@@ -322,6 +331,8 @@ func enrichValuation(equity *model.Equity) {
 	valuation.ForwardEVToEBITDA = ratio(valuation.EnterpriseValueB, forecast.ForwardEBITDAB)
 	valuation.EVToEBIT = ratio(valuation.EnterpriseValueB, ttmEBIT)
 	valuation.ForwardEVToEBIT = ratio(valuation.EnterpriseValueB, forecast.ForwardEBITB)
+	valuation.OperatingCashToMarketCap = ratio(ttmOperatingCash, valuation.MarketCapB)
+	valuation.ForwardOperatingCashToMarketCap = ratio(forecast.ForwardOperatingCashB, valuation.MarketCapB)
 	valuation.FCFToMarketCap = ratio(ttmFCF, valuation.MarketCapB)
 	valuation.ForwardFCFToMarketCap = ratio(forecast.ForwardFCFB, valuation.MarketCapB)
 	valuation.FCFToEV = ratio(ttmFCF, valuation.EnterpriseValueB)
@@ -339,7 +350,7 @@ func enrichValuation(equity *model.Equity) {
 func buildForecast(
 	equity *model.Equity,
 	recent, previous []model.QuarterlyPoint,
-	ttmRevenue, ttmEBIT, ttmEBITDA, ttmFCF, ttmNetIncome, ttmDividends, ttmEPS *float64,
+	ttmRevenue, ttmEBIT, ttmEBITDA, ttmOperatingCash, ttmFCF, ttmNetIncome, ttmDividends, ttmEPS *float64,
 ) model.ForecastModel {
 	growth := 0.05
 	previousRevenue := sumQuarterValues(previous, func(row model.QuarterlyPoint) *float64 { return row.RevenueB })
@@ -357,11 +368,13 @@ func buildForecast(
 		forecast.ForwardRevenueB = floatPtr(*ttmRevenue * (1 + growth))
 		forecast.EBITMargin = ratio(ttmEBIT, ttmRevenue)
 		forecast.EBITDAMargin = ratio(ttmEBITDA, ttmRevenue)
+		forecast.OperatingCashMargin = ratio(ttmOperatingCash, ttmRevenue)
 		forecast.FCFMargin = ratio(ttmFCF, ttmRevenue)
 	}
 	if forecast.ForwardRevenueB != nil {
 		forecast.ForwardEBITB = product(forecast.ForwardRevenueB, forecast.EBITMargin)
 		forecast.ForwardEBITDAB = product(forecast.ForwardRevenueB, forecast.EBITDAMargin)
+		forecast.ForwardOperatingCashB = product(forecast.ForwardRevenueB, forecast.OperatingCashMargin)
 		forecast.ForwardFCFB = product(forecast.ForwardRevenueB, forecast.FCFMargin)
 	}
 	if ttmNetIncome != nil {
@@ -481,6 +494,9 @@ func latestAnnualEstimate(rows []model.AnnualPoint) *model.AnnualPoint {
 func ratio(numerator, denominator *float64) *float64 {
 	if numerator == nil || denominator == nil || *denominator == 0 {
 		return nil
+	}
+	if *numerator == 0 {
+		return floatPtr(0)
 	}
 	return floatPtr(*numerator / *denominator)
 }

@@ -19,7 +19,7 @@ var (
 	investmentTags      = []string{"MarketableSecuritiesCurrent", "ShortTermInvestments"}
 	currentDebtTags     = []string{"LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"}
 	noncurrentDebtTags  = []string{"LongTermDebtNoncurrent"}
-	totalDebtTags       = []string{"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities", "LongTermDebt"}
+	totalDebtTags       = []string{"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities", "DebtLongtermAndShorttermCombinedAmount", "DebtAndCapitalLeaseObligations", "LongTermDebt"}
 	assetTags           = []string{"Assets"}
 	liabilityTags       = []string{"Liabilities"}
 	equityTags          = []string{"StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"}

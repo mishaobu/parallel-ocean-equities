@@ -7,6 +7,7 @@ describe("valuation presentation", () => {
       "P/E",
       "EV / EBITDA",
       "EV / EBIT",
+      "OCF / market cap",
       "FCF / market cap",
       "FCF / EV",
       "Net debt / EBITDA",

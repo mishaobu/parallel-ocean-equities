@@ -8,6 +8,7 @@ Core definitions:
 
 - `EBIT = OperatingIncomeLoss`
 - `EBITDA = EBIT + depreciation and amortization`
+- `OCF yield = operating cash flow / market cap`
 - `FCF = operating cash flow - capital expenditure`
 - `Net debt = current debt + non-current debt - cash - current marketable securities`
 - `Market cap = latest adjusted close x latest diluted weighted-average shares`
@@ -17,7 +18,7 @@ Trailing values sum the latest four quarters. Negative earnings and operating de
 
 ## Model values
 
-Model revenue uses trailing revenue multiplied by year-over-year trailing revenue growth, bounded from -20% to 40%. Model EBIT, EBITDA, and FCF hold the corresponding trailing margin constant. Model dividends grow with revenue, bounded from 0% to 20%. Configured annual estimates override modeled net income and diluted EPS.
+Model revenue uses trailing revenue multiplied by year-over-year trailing revenue growth, bounded from -20% to 40%. Model EBIT, EBITDA, operating cash flow, and FCF hold the corresponding trailing margin constant. Model dividends grow with revenue, bounded from 0% to 20%. Configured annual estimates override modeled net income and diluted EPS.
 
 All model ratios use current market cap, enterprise value, and net debt with the modeled denominator. The current valuation table labels these values `Model`; they are internal model outputs, not analyst consensus or reported SEC facts.
 

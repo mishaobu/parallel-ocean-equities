@@ -98,6 +98,26 @@ func TestDurationQuarterFactsPreservesComparativePeriodsByEndDate(t *testing.T) 
 	assertQuarterFact(t, "current Q1", values["2025-09-30"], 7e9)
 }
 
+func TestExtractQuarterliesUsesCombinedShortAndLongTermDebt(t *testing.T) {
+	response := companyFacts{Facts: map[string]map[string]factConcept{"us-gaap": {
+		"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(
+			quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 100e9),
+		),
+		"CashAndCashEquivalentsAtCarryingValue":  instantConceptAt(2024, "Q1", "2024-03-31", 10e9),
+		"DebtLongtermAndShorttermCombinedAmount": instantConceptAt(2024, "Q1", "2024-03-31", 50e9),
+	}}}
+
+	rows, err := extractQuarterlies(response, "0000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one quarter, got %d", len(rows))
+	}
+	assertFloat(t, "combined debt", rows[0].DebtB, 50)
+	assertFloat(t, "combined debt net debt", rows[0].NetDebtB, 40)
+}
+
 func durationConcept(values ...fact) factConcept {
 	return factConcept{Units: map[string][]fact{"USD": values}}
 }
@@ -112,6 +132,10 @@ func annualDuration(year int, value float64) fact {
 
 func instantConcept(year int, period string, value float64) factConcept {
 	return factConcept{Units: map[string][]fact{"USD": {{End: "2024-12-31", Val: value, Accn: "0000000001-25-000004", FY: year, FP: period, Form: "10-K", Filed: "2025-02-20"}}}}
+}
+
+func instantConceptAt(year int, period, end string, value float64) factConcept {
+	return factConcept{Units: map[string][]fact{"USD": {{End: end, Val: value, Accn: "0000000001-24-000001", FY: year, FP: period, Form: "10-Q", Filed: end}}}}
 }
 
 func assertFloat(t *testing.T, label string, actual *float64, expected float64) {

@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 8
+const StateVersion = 9
 
 type AnnualPoint struct {
 	FiscalYear     int      `json:"fiscalYear"`
@@ -63,49 +63,54 @@ type QuarterlyPoint struct {
 }
 
 type ValuationMetrics struct {
-	AsOf                   string   `json:"asOf,omitempty"`
-	MarketCapB             *float64 `json:"marketCapB,omitempty"`
-	EnterpriseValueB       *float64 `json:"enterpriseValueB,omitempty"`
-	TTMRevenueB            *float64 `json:"ttmRevenueB,omitempty"`
-	TTMEBITDAB             *float64 `json:"ttmEbitdaB,omitempty"`
-	TTMEBITB               *float64 `json:"ttmEbitB,omitempty"`
-	TTMFCFB                *float64 `json:"ttmFcfB,omitempty"`
-	TTMNetIncomeB          *float64 `json:"ttmNetIncomeB,omitempty"`
-	TTMDividendsB          *float64 `json:"ttmDividendsB,omitempty"`
-	NetDebtB               *float64 `json:"netDebtB,omitempty"`
-	DilutedSharesB         *float64 `json:"dilutedSharesB,omitempty"`
-	PE                     *float64 `json:"pe,omitempty"`
-	ForwardPE              *float64 `json:"forwardPe,omitempty"`
-	EVToEBITDA             *float64 `json:"evToEbitda,omitempty"`
-	ForwardEVToEBITDA      *float64 `json:"forwardEvToEbitda,omitempty"`
-	EVToEBIT               *float64 `json:"evToEbit,omitempty"`
-	ForwardEVToEBIT        *float64 `json:"forwardEvToEbit,omitempty"`
-	FCFToMarketCap         *float64 `json:"fcfToMarketCap,omitempty"`
-	ForwardFCFToMarketCap  *float64 `json:"forwardFcfToMarketCap,omitempty"`
-	FCFToEV                *float64 `json:"fcfToEv,omitempty"`
-	ForwardFCFToEV         *float64 `json:"forwardFcfToEv,omitempty"`
-	NetDebtToEBITDA        *float64 `json:"netDebtToEbitda,omitempty"`
-	ForwardNetDebtToEBITDA *float64 `json:"forwardNetDebtToEbitda,omitempty"`
-	DividendToFCF          *float64 `json:"dividendToFcf,omitempty"`
-	ForwardDividendToFCF   *float64 `json:"forwardDividendToFcf,omitempty"`
+	AsOf                            string   `json:"asOf,omitempty"`
+	MarketCapB                      *float64 `json:"marketCapB,omitempty"`
+	EnterpriseValueB                *float64 `json:"enterpriseValueB,omitempty"`
+	TTMRevenueB                     *float64 `json:"ttmRevenueB,omitempty"`
+	TTMEBITDAB                      *float64 `json:"ttmEbitdaB,omitempty"`
+	TTMEBITB                        *float64 `json:"ttmEbitB,omitempty"`
+	TTMOperatingCashB               *float64 `json:"ttmOperatingCashB,omitempty"`
+	TTMFCFB                         *float64 `json:"ttmFcfB,omitempty"`
+	TTMNetIncomeB                   *float64 `json:"ttmNetIncomeB,omitempty"`
+	TTMDividendsB                   *float64 `json:"ttmDividendsB,omitempty"`
+	NetDebtB                        *float64 `json:"netDebtB,omitempty"`
+	DilutedSharesB                  *float64 `json:"dilutedSharesB,omitempty"`
+	PE                              *float64 `json:"pe,omitempty"`
+	ForwardPE                       *float64 `json:"forwardPe,omitempty"`
+	EVToEBITDA                      *float64 `json:"evToEbitda,omitempty"`
+	ForwardEVToEBITDA               *float64 `json:"forwardEvToEbitda,omitempty"`
+	EVToEBIT                        *float64 `json:"evToEbit,omitempty"`
+	ForwardEVToEBIT                 *float64 `json:"forwardEvToEbit,omitempty"`
+	OperatingCashToMarketCap        *float64 `json:"operatingCashToMarketCap,omitempty"`
+	ForwardOperatingCashToMarketCap *float64 `json:"forwardOperatingCashToMarketCap,omitempty"`
+	FCFToMarketCap                  *float64 `json:"fcfToMarketCap,omitempty"`
+	ForwardFCFToMarketCap           *float64 `json:"forwardFcfToMarketCap,omitempty"`
+	FCFToEV                         *float64 `json:"fcfToEv,omitempty"`
+	ForwardFCFToEV                  *float64 `json:"forwardFcfToEv,omitempty"`
+	NetDebtToEBITDA                 *float64 `json:"netDebtToEbitda,omitempty"`
+	ForwardNetDebtToEBITDA          *float64 `json:"forwardNetDebtToEbitda,omitempty"`
+	DividendToFCF                   *float64 `json:"dividendToFcf,omitempty"`
+	ForwardDividendToFCF            *float64 `json:"forwardDividendToFcf,omitempty"`
 }
 
 type ValuationPoint struct {
-	Date                   string   `json:"date"`
-	PE                     *float64 `json:"pe,omitempty"`
-	ForwardPE              *float64 `json:"forwardPe,omitempty"`
-	EVToEBITDA             *float64 `json:"evToEbitda,omitempty"`
-	ForwardEVToEBITDA      *float64 `json:"forwardEvToEbitda,omitempty"`
-	EVToEBIT               *float64 `json:"evToEbit,omitempty"`
-	ForwardEVToEBIT        *float64 `json:"forwardEvToEbit,omitempty"`
-	FCFToMarketCap         *float64 `json:"fcfToMarketCap,omitempty"`
-	ForwardFCFToMarketCap  *float64 `json:"forwardFcfToMarketCap,omitempty"`
-	FCFToEV                *float64 `json:"fcfToEv,omitempty"`
-	ForwardFCFToEV         *float64 `json:"forwardFcfToEv,omitempty"`
-	NetDebtToEBITDA        *float64 `json:"netDebtToEbitda,omitempty"`
-	ForwardNetDebtToEBITDA *float64 `json:"forwardNetDebtToEbitda,omitempty"`
-	DividendToFCF          *float64 `json:"dividendToFcf,omitempty"`
-	ForwardDividendToFCF   *float64 `json:"forwardDividendToFcf,omitempty"`
+	Date                            string   `json:"date"`
+	PE                              *float64 `json:"pe,omitempty"`
+	ForwardPE                       *float64 `json:"forwardPe,omitempty"`
+	EVToEBITDA                      *float64 `json:"evToEbitda,omitempty"`
+	ForwardEVToEBITDA               *float64 `json:"forwardEvToEbitda,omitempty"`
+	EVToEBIT                        *float64 `json:"evToEbit,omitempty"`
+	ForwardEVToEBIT                 *float64 `json:"forwardEvToEbit,omitempty"`
+	OperatingCashToMarketCap        *float64 `json:"operatingCashToMarketCap,omitempty"`
+	ForwardOperatingCashToMarketCap *float64 `json:"forwardOperatingCashToMarketCap,omitempty"`
+	FCFToMarketCap                  *float64 `json:"fcfToMarketCap,omitempty"`
+	ForwardFCFToMarketCap           *float64 `json:"forwardFcfToMarketCap,omitempty"`
+	FCFToEV                         *float64 `json:"fcfToEv,omitempty"`
+	ForwardFCFToEV                  *float64 `json:"forwardFcfToEv,omitempty"`
+	NetDebtToEBITDA                 *float64 `json:"netDebtToEbitda,omitempty"`
+	ForwardNetDebtToEBITDA          *float64 `json:"forwardNetDebtToEbitda,omitempty"`
+	DividendToFCF                   *float64 `json:"dividendToFcf,omitempty"`
+	ForwardDividendToFCF            *float64 `json:"forwardDividendToFcf,omitempty"`
 }
 
 type MacroPoint struct {
@@ -272,20 +277,22 @@ type AssetSeries struct {
 }
 
 type ForecastModel struct {
-	Horizon           string   `json:"horizon,omitempty"`
-	Method            string   `json:"method,omitempty"`
-	RevenueGrowth     *float64 `json:"revenueGrowth,omitempty"`
-	EBITMargin        *float64 `json:"ebitMargin,omitempty"`
-	EBITDAMargin      *float64 `json:"ebitdaMargin,omitempty"`
-	FCFMargin         *float64 `json:"fcfMargin,omitempty"`
-	DividendGrowth    *float64 `json:"dividendGrowth,omitempty"`
-	ForwardRevenueB   *float64 `json:"forwardRevenueB,omitempty"`
-	ForwardEBITB      *float64 `json:"forwardEbitB,omitempty"`
-	ForwardEBITDAB    *float64 `json:"forwardEbitdaB,omitempty"`
-	ForwardFCFB       *float64 `json:"forwardFcfB,omitempty"`
-	ForwardNetIncomeB *float64 `json:"forwardNetIncomeB,omitempty"`
-	ForwardDividendsB *float64 `json:"forwardDividendsB,omitempty"`
-	ForwardEPS        *float64 `json:"forwardEps,omitempty"`
+	Horizon               string   `json:"horizon,omitempty"`
+	Method                string   `json:"method,omitempty"`
+	RevenueGrowth         *float64 `json:"revenueGrowth,omitempty"`
+	EBITMargin            *float64 `json:"ebitMargin,omitempty"`
+	EBITDAMargin          *float64 `json:"ebitdaMargin,omitempty"`
+	OperatingCashMargin   *float64 `json:"operatingCashMargin,omitempty"`
+	FCFMargin             *float64 `json:"fcfMargin,omitempty"`
+	DividendGrowth        *float64 `json:"dividendGrowth,omitempty"`
+	ForwardRevenueB       *float64 `json:"forwardRevenueB,omitempty"`
+	ForwardEBITB          *float64 `json:"forwardEbitB,omitempty"`
+	ForwardEBITDAB        *float64 `json:"forwardEbitdaB,omitempty"`
+	ForwardOperatingCashB *float64 `json:"forwardOperatingCashB,omitempty"`
+	ForwardFCFB           *float64 `json:"forwardFcfB,omitempty"`
+	ForwardNetIncomeB     *float64 `json:"forwardNetIncomeB,omitempty"`
+	ForwardDividendsB     *float64 `json:"forwardDividendsB,omitempty"`
+	ForwardEPS            *float64 `json:"forwardEps,omitempty"`
 }
 
 type ValuationModels struct {

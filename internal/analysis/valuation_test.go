@@ -22,6 +22,7 @@ func TestEnrichValuationBuildsOrderedActualAndForwardInputs(t *testing.T) {
 			RevenueB:       floatPtr(revenue),
 			EBITB:          floatPtr(6),
 			EBITDAB:        floatPtr(7),
+			OperatingCashB: floatPtr(6),
 			FCFB:           floatPtr(5),
 			NetIncomeB:     floatPtr(4),
 			DividendsB:     floatPtr(1),
@@ -38,6 +39,8 @@ func TestEnrichValuationBuildsOrderedActualAndForwardInputs(t *testing.T) {
 	assertClose(t, "forward P/E", equity.Valuation.ForwardPE, 50.0/3.0)
 	assertClose(t, "EV/EBITDA", equity.Valuation.EVToEBITDA, 110.0/28.0)
 	assertClose(t, "forward EV/EBITDA", equity.Valuation.ForwardEVToEBITDA, 110.0/33.6)
+	assertClose(t, "OCF/market cap", equity.Valuation.OperatingCashToMarketCap, 0.24)
+	assertClose(t, "forward OCF/market cap", equity.Valuation.ForwardOperatingCashToMarketCap, 0.288)
 	assertClose(t, "FCF/market cap", equity.Valuation.FCFToMarketCap, 0.20)
 	assertClose(t, "forward FCF/market cap", equity.Valuation.ForwardFCFToMarketCap, 0.24)
 	assertClose(t, "dividend/FCF", equity.Valuation.DividendToFCF, 0.20)
@@ -59,6 +62,7 @@ func TestEnrichValuationHistoryUsesTrailingAndRealizedForwardQuarters(t *testing
 			PeriodEnd:      []string{"2024-03-31", "2024-06-30", "2024-09-30", "2024-12-31", "2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31"}[index],
 			EBITB:          floatPtr(5),
 			EBITDAB:        floatPtr(6),
+			OperatingCashB: floatPtr(5),
 			FCFB:           floatPtr(4),
 			NetIncomeB:     floatPtr(2),
 			DividendsB:     floatPtr(1),
@@ -78,6 +82,8 @@ func TestEnrichValuationHistoryUsesTrailingAndRealizedForwardQuarters(t *testing
 	assertClose(t, "historical P/E", first.PE, 10)
 	assertClose(t, "realized forward P/E", first.ForwardPE, 10)
 	assertClose(t, "historical EV/EBITDA", first.EVToEBITDA, 88.0/24.0)
+	assertClose(t, "historical OCF/market cap", first.OperatingCashToMarketCap, 20.0/80.0)
+	assertClose(t, "realized forward OCF/market cap", first.ForwardOperatingCashToMarketCap, 20.0/80.0)
 	assertClose(t, "historical FCF/market cap", first.FCFToMarketCap, 16.0/80.0)
 	latest := equity.Valuations[len(equity.Valuations)-1]
 	if latest.Date != "2026-02-01" {
@@ -142,6 +148,13 @@ func TestMeaningfulMultipleRejectsNonpositiveAndExtremeDenominators(t *testing.T
 	}
 	if meaningfulMultiple(floatPtr(500), floatPtr(2)) != nil {
 		t.Fatal("multiple above 200x should not be charted")
+	}
+}
+
+func TestRatioNormalizesSignedZero(t *testing.T) {
+	value := ratio(floatPtr(0), floatPtr(-2))
+	if value == nil || math.Signbit(*value) {
+		t.Fatalf("zero ratio should not retain a negative sign: %#v", value)
 	}
 }
 

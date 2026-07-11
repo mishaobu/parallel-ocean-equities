@@ -65,6 +65,7 @@ export interface ValuationMetrics {
   ttmRevenueB?: number;
   ttmEbitdaB?: number;
   ttmEbitB?: number;
+  ttmOperatingCashB?: number;
   ttmFcfB?: number;
   ttmNetIncomeB?: number;
   ttmDividendsB?: number;
@@ -76,6 +77,8 @@ export interface ValuationMetrics {
   forwardEvToEbitda?: number;
   evToEbit?: number;
   forwardEvToEbit?: number;
+  operatingCashToMarketCap?: number;
+  forwardOperatingCashToMarketCap?: number;
   fcfToMarketCap?: number;
   forwardFcfToMarketCap?: number;
   fcfToEv?: number;
@@ -94,6 +97,8 @@ export interface ValuationPoint {
   forwardEvToEbitda?: number;
   evToEbit?: number;
   forwardEvToEbit?: number;
+  operatingCashToMarketCap?: number;
+  forwardOperatingCashToMarketCap?: number;
   fcfToMarketCap?: number;
   forwardFcfToMarketCap?: number;
   fcfToEv?: number;
@@ -150,11 +155,13 @@ export interface ForecastModel {
   revenueGrowth?: number;
   ebitMargin?: number;
   ebitdaMargin?: number;
+  operatingCashMargin?: number;
   fcfMargin?: number;
   dividendGrowth?: number;
   forwardRevenueB?: number;
   forwardEbitB?: number;
   forwardEbitdaB?: number;
+  forwardOperatingCashB?: number;
   forwardFcfB?: number;
   forwardNetIncomeB?: number;
   forwardDividendsB?: number;
