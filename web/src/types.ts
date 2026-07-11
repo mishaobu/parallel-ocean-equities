@@ -37,6 +37,7 @@ export interface AnnualPoint {
 export interface PricePoint {
   date: string;
   close: number;
+  totalReturnClose?: number;
 }
 
 export interface QuarterlyPoint {

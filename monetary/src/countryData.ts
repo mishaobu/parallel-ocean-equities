@@ -25,7 +25,8 @@ export function countrySnapshots(countries: CountrySeries[]): CountrySnapshot[] 
       const reading = latestCountryReading(country.points ?? [], metric, globalLatest);
       if (reading) values[metric] = reading;
     }
-    const asOf = Object.values(values).reduce((latest, reading) => reading && reading.date > latest ? reading.date : latest, "");
+		const comparable = (["inflation", "policyRate", "realRate", "industrialGrowth", "moneyGrowth", "longRate", "yieldCurve"] as CountryMetric[]).flatMap((metric) => values[metric]?.date ? [values[metric]!.date] : []);
+		const asOf = comparable.reduce((oldest, date) => !oldest || date < oldest ? date : oldest, "");
     return { country, regime: countryRegime(values.inflation, values.industrialGrowth), asOf, values };
   });
 }

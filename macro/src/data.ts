@@ -20,15 +20,16 @@ export function rangeDomain(assets: AssetSeries[], countries: CountrySeries[], r
   return [start.getTime(), end];
 }
 
-export function snapshots(countries: CountrySeries[]): Snapshot[] {
-  const latest = countries.flatMap((country) => country.points ?? []).reduce((max, point) => point.date > max ? point.date : max, "");
+export function snapshots(countries: CountrySeries[], cutoff?: string): Snapshot[] {
+  const latest = cutoff || countries.flatMap((country) => country.points ?? []).reduce((max, point) => point.date > max ? point.date : max, "");
   return countries.map((country) => {
     const values: Snapshot["values"] = {};
     for (const metric of ["inflation", "policyRate", "realRate", "industrialGrowth", "moneyGrowth", "longRate", "yieldCurve", "fx", "unemployment"] as CountryMetric[]) {
       const reading = latestReading(country.points ?? [], metric, latest);
       if (reading) values[metric] = reading;
     }
-    const asOf = Object.values(values).reduce((max, reading) => reading && reading.date > max ? reading.date : max, "");
+		const comparable = (["inflation", "policyRate", "realRate", "industrialGrowth", "moneyGrowth", "longRate", "yieldCurve"] as CountryMetric[]).flatMap((metric) => values[metric]?.date ? [values[metric]!.date] : []);
+		const asOf = comparable.reduce((oldest, date) => !oldest || date < oldest ? date : oldest, "");
     return { country, values, asOf, regime: regime(values.inflation, values.industrialGrowth) };
   });
 }
@@ -36,11 +37,13 @@ export function snapshots(countries: CountrySeries[]): Snapshot[] {
 export function latestReading(points: CountryPoint[], metric: CountryMetric, end?: string): Reading | undefined {
   const latest = end || points.reduce((max, point) => point.date > max ? point.date : max, "");
   for (let index = points.length - 1; index >= 0; index -= 1) {
+		if (points[index].date > latest) continue;
     const value = points[index][metric];
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
     const dateField = dateFields[metric];
     const explicit = dateField ? points[index][dateField] : undefined;
     const date = typeof explicit === "string" && explicit ? explicit : points[index].date;
+		if (date > latest) continue;
     return { value, date, ageMonths: monthDistance(date, latest) };
   }
   return undefined;
@@ -61,17 +64,18 @@ export function sortSnapshots(rows: Snapshot[], key: MatrixSort, direction: "asc
 }
 
 export function indexedAssetRows(assets: AssetSeries[], symbols: string[], domain: [number, number]) {
-  const selected = assets.filter((asset) => symbols.includes(asset.symbol));
-  const baselines = new Map<string, number>();
-  const rows = new Map<string, Record<string, string | number>>();
-  selected.forEach((asset) => {
-    const points = (asset.points ?? []).filter((point) => { const date = Date.parse(point.date); return date >= domain[0] && date <= domain[1]; });
-    const baseline = points.find((point) => point.close > 0)?.close;
-    if (!baseline) return;
-    baselines.set(asset.symbol, baseline);
-    points.forEach((point) => {
-      const row = rows.get(point.date) ?? { date: point.date, timestamp: Date.parse(point.date) };
-      row[asset.symbol] = point.close / baseline * 100;
+	const selected = assets.filter((asset) => symbols.includes(asset.symbol));
+	const eligible = selected.map((asset) => ({ asset, points: (asset.points ?? []).filter((point) => { const date = Date.parse(point.date); return date >= domain[0] && date <= domain[1] && returnValue(point) > 0; }) })).filter((item) => item.points.length > 0);
+	if (!eligible.length) return [];
+	const commonStart = Math.max(...eligible.map((item) => Date.parse(item.points[0].date)));
+	const rows = new Map<string, Record<string, string | number>>();
+	eligible.forEach(({ asset, points: available }) => {
+		const points = available.filter((point) => Date.parse(point.date) >= commonStart);
+		const baseline = points[0] ? returnValue(points[0]) : undefined;
+		if (!baseline) return;
+		points.forEach((point) => {
+			const row = rows.get(point.date) ?? { date: point.date, timestamp: Date.parse(point.date) };
+			row[asset.symbol] = returnValue(point) / baseline * 100;
       rows.set(point.date, row);
     });
   });
@@ -118,11 +122,15 @@ export function scenarioImpacts(assets: AssetSeries[], inputs: ScenarioInputs) {
 }
 
 function annualizedReturn(points: Array<{ close: number }>, months: number) {
-  if (points.length < 2) return undefined;
-  const latest = points[points.length - 1].close;
-  const prior = points[Math.max(0, points.length - 1 - months)]?.close;
+	if (points.length < 2) return undefined;
+	const latest = returnValue(points[points.length - 1]);
+	const prior = returnValue(points[Math.max(0, points.length - 1 - months)]);
   const elapsed = Math.min(months, points.length - 1) / 12;
   return prior > 0 && elapsed > 0 ? (Math.pow(latest / prior, 1 / elapsed) - 1) * 100 : undefined;
+}
+
+export function returnValue(point: { close: number; totalReturnClose?: number }) {
+	return point.totalReturnClose && point.totalReturnClose > 0 ? point.totalReturnClose : point.close;
 }
 function regime(inflation?: Reading, growth?: Reading) {
   if (!inflation || !growth) return "Partial signal";

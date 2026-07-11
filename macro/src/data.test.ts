@@ -4,10 +4,16 @@ import { fittedYDomain } from "./components/Charts";
 import type { AssetSeries, CountrySeries } from "./types";
 
 describe("macro data", () => {
-  it("indexes every asset to its first in-range observation", () => {
-    const assets: AssetSeries[] = [{ symbol: "SPY", label: "US", group: "Equities", points: [{ date: "2020-01-01", close: 10 }, { date: "2020-02-01", close: 12 }] }];
-    expect(indexedAssetRows(assets, ["SPY"], [Date.parse("2020-01-01"), Date.parse("2020-12-01")])).toMatchObject([{ SPY: 100 }, { SPY: 120 }]);
-  });
+	it("indexes assets to a common start using adjusted return closes", () => {
+		const assets: AssetSeries[] = [
+			{ symbol: "SPY", label: "US", group: "Equities", points: [{ date: "2019-01-01", close: 8, totalReturnClose: 5 }, { date: "2020-01-01", close: 10, totalReturnClose: 8 }, { date: "2020-02-01", close: 12, totalReturnClose: 12 }] },
+			{ symbol: "QQQ", label: "Growth", group: "Equities", points: [{ date: "2020-01-01", close: 20, totalReturnClose: 16 }, { date: "2020-02-01", close: 22, totalReturnClose: 20 }] },
+		];
+		expect(indexedAssetRows(assets, ["SPY", "QQQ"], [Date.parse("2019-01-01"), Date.parse("2020-12-01")])).toEqual([
+			{ date: "2020-01-01", timestamp: Date.parse("2020-01-01"), SPY: 100, QQQ: 100 },
+			{ date: "2020-02-01", timestamp: Date.parse("2020-02-01"), SPY: 150, QQQ: 125 },
+		]);
+	});
 
   it("sorts missing country values last", () => {
     const countries: CountrySeries[] = [
@@ -24,6 +30,15 @@ describe("macro data", () => {
     }];
     expect(snapshots(countries)[0].regime).toBe("Partial / stale signal");
   });
+
+	it("reconstructs country readings at a common historical cutoff", () => {
+		const countries: CountrySeries[] = [{ code: "US", name: "United States", currency: "USD", region: "Americas", policyLabel: "Fed", fxLabel: "USD", points: [
+			{ date: "2020-01-01", inflation: 2, policyRate: 1 }, { date: "2021-01-01", inflation: 4, policyRate: 3 },
+		] }];
+		const row = snapshots(countries, "2020-06-01")[0];
+		expect(row.values.inflation?.value).toBe(2);
+		expect(row.values.policyRate?.value).toBe(1);
+	});
 
   it("applies directional scenario exposures", () => {
     const assets: AssetSeries[] = [{ symbol: "TLT", label: "Duration", group: "Rates" }, { symbol: "QQQ", label: "Growth", group: "Equities" }];

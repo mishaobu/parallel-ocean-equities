@@ -5,20 +5,21 @@ import { formatBillions, percentValue } from "../valuationData";
 type ModelKind = "dcf" | "multiple" | "earnings";
 
 export function ValuationWorkbench({ equity }: { equity: Equity }) {
-  const [model, setModel] = useState<ModelKind>("dcf");
+	const [model, setModel] = useState<ModelKind>(() => preferredModel(equity));
   const [growth, setGrowth] = useState(percentInput(equity.models?.fcfGrowth, 8));
   const [wacc, setWacc] = useState(percentInput(equity.models?.wacc, 9));
   const [terminalGrowth, setTerminalGrowth] = useState(percentInput(equity.models?.terminalGrowth, 3));
   const [multiple, setMultiple] = useState(equity.models?.targetEvToEbitda ?? 15);
   const [targetPE, setTargetPE] = useState(equity.models?.targetPe ?? 20);
 
-  useEffect(() => {
+	useEffect(() => {
+		setModel(preferredModel(equity));
     setGrowth(percentInput(equity.models?.fcfGrowth, 8));
     setWacc(percentInput(equity.models?.wacc, 9));
     setTerminalGrowth(percentInput(equity.models?.terminalGrowth, 3));
     setMultiple(equity.models?.targetEvToEbitda ?? 15);
     setTargetPE(equity.models?.targetPe ?? 20);
-  }, [equity.ticker, equity.models]);
+  }, [equity.ticker, equity.forecast, equity.models]);
 
   const calculations = useMemo(() => {
     const base = modelValue(model, equity, { growth, wacc, terminalGrowth, multiple, targetPE });
@@ -37,9 +38,9 @@ export function ValuationWorkbench({ equity }: { equity: Equity }) {
       </div>
       <div className="model-workbench">
         <div className="model-tabs" aria-label="Valuation model">
-          <button type="button" className={model === "dcf" ? "is-active" : ""} onClick={() => setModel("dcf")}>DCF</button>
-          <button type="button" className={model === "multiple" ? "is-active" : ""} onClick={() => setModel("multiple")}>EV / EBITDA</button>
-          <button type="button" className={model === "earnings" ? "is-active" : ""} onClick={() => setModel("earnings")}>P/E</button>
+			<button type="button" className={model === "dcf" ? "is-active" : ""} onClick={() => setModel("dcf")} disabled={!viableModel("dcf", equity)} title={!viableModel("dcf", equity) ? "DCF requires positive forward free cash flow" : undefined}>DCF</button>
+			<button type="button" className={model === "multiple" ? "is-active" : ""} onClick={() => setModel("multiple")} disabled={!viableModel("multiple", equity)} title={!viableModel("multiple", equity) ? "EV / EBITDA requires positive forward EBITDA" : undefined}>EV / EBITDA</button>
+			<button type="button" className={model === "earnings" ? "is-active" : ""} onClick={() => setModel("earnings")} disabled={!viableModel("earnings", equity)} title={!viableModel("earnings", equity) ? "P/E requires positive forward EPS" : undefined}>P/E</button>
         </div>
         <div className="model-grid">
           <div className="model-controls">
@@ -66,7 +67,7 @@ export function ValuationWorkbench({ equity }: { equity: Equity }) {
             </table>
           </div>
         </div>
-        <div className="model-source"><span>{equity.forecast?.horizon ?? "Forward"}</span><span>{equity.forecast?.method ?? "Model inputs unavailable"}</span></div>
+        <div className="model-source"><span>Price {equity.current.priceAsOf ?? "n/a"} / fundamentals {equity.valuation?.asOf ?? equity.quarterlies?.at(-1)?.periodEnd ?? "n/a"} / filed {equity.quarterlies?.at(-1)?.filedAt ?? "n/a"}</span><span>{equity.forecast?.horizon ?? "Forward"} / {equity.forecast?.method ?? "Model inputs unavailable"}</span></div>
       </div>
     </>
   );
@@ -101,6 +102,16 @@ function modelValue(model: ModelKind, equity: Equity, inputs: Inputs): number | 
   if (model === "multiple") return impliedMultiple(equity.forecast?.forwardEbitdaB, equity.valuation?.netDebtB, equity.valuation?.dilutedSharesB, inputs.multiple);
   const eps = equity.forecast?.forwardEps;
   return eps === undefined || eps <= 0 ? undefined : eps * inputs.targetPE;
+}
+
+function viableModel(model: ModelKind, equity: Equity) {
+	if (model === "dcf") return (equity.forecast?.forwardFcfB ?? 0) > 0;
+	if (model === "multiple") return (equity.forecast?.forwardEbitdaB ?? 0) > 0;
+	return (equity.forecast?.forwardEps ?? 0) > 0;
+}
+
+function preferredModel(equity: Equity): ModelKind {
+	return viableModel("dcf", equity) ? "dcf" : viableModel("multiple", equity) ? "multiple" : "earnings";
 }
 
 function scenarioValues(model: ModelKind, equity: Equity, inputs: Inputs) {

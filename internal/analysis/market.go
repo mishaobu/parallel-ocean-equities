@@ -29,6 +29,21 @@ type Pipeline struct {
 	Market MarketProvider
 }
 
+func (p *Pipeline) PreviewTicker(ctx context.Context, ticker string) (TickerPreview, error) {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if profile, ok := instrumentProfiles[ticker]; ok {
+		return TickerPreview{Ticker: ticker, Company: profile.company, InstrumentType: profile.kind, Source: "Curated instrument registry"}, nil
+	}
+	if p.SEC == nil {
+		return TickerPreview{}, errors.New("SEC provider is not configured")
+	}
+	company, err := p.SEC.lookup(ctx, ticker)
+	if err != nil {
+		return TickerPreview{}, err
+	}
+	return TickerPreview{Ticker: company.Ticker, Company: company.Title, InstrumentType: "US equity", CIK: fmt.Sprintf("%010d", company.CIK), Source: "SEC company ticker map"}, nil
+}
+
 type instrumentProfile struct {
 	company    string
 	kind       string
@@ -253,7 +268,7 @@ func (y *YahooMarket) History(ctx context.Context, ticker string, start, end tim
 		"period2":              {strconv.FormatInt(end.AddDate(0, 0, 1).Unix(), 10)},
 		"interval":             {"1mo"},
 		"events":               {"history"},
-		"includeAdjustedClose": {"false"},
+		"includeAdjustedClose": {"true"},
 	}
 	endpoint := y.baseURL + "/v8/finance/chart/" + url.PathEscape(ticker) + "?" + query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -278,6 +293,9 @@ func (y *YahooMarket) History(ctx context.Context, ticker string, start, end tim
 					Quote []struct {
 						Close []*float64 `json:"close"`
 					} `json:"quote"`
+					AdjClose []struct {
+						Close []*float64 `json:"adjclose"`
+					} `json:"adjclose"`
 				} `json:"indicators"`
 			} `json:"result"`
 			Error *struct {
@@ -296,6 +314,10 @@ func (y *YahooMarket) History(ctx context.Context, ticker string, start, end tim
 	}
 	result := payload.Chart.Result[0]
 	closes := result.Indicators.Quote[0].Close
+	var totalReturnCloses []*float64
+	if len(result.Indicators.AdjClose) > 0 {
+		totalReturnCloses = result.Indicators.AdjClose[0].Close
+	}
 	prices := make([]model.PricePoint, 0, len(result.Timestamps))
 	for index, timestamp := range result.Timestamps {
 		if index >= len(closes) || closes[index] == nil || *closes[index] <= 0 {
@@ -306,12 +328,16 @@ func (y *YahooMarket) History(ctx context.Context, ticker string, start, end tim
 		if observed.Year() != end.Year() || observed.Month() != end.Month() {
 			date = time.Date(observed.Year(), observed.Month()+1, 0, 0, 0, 0, 0, time.UTC)
 		}
-		prices = append(prices, model.PricePoint{Date: date.Format("2006-01-02"), Close: *closes[index]})
+		point := model.PricePoint{Date: date.Format("2006-01-02"), Close: *closes[index]}
+		if index < len(totalReturnCloses) && totalReturnCloses[index] != nil && *totalReturnCloses[index] > 0 {
+			point.TotalReturnClose = totalReturnCloses[index]
+		}
+		prices = append(prices, point)
 	}
 	if len(prices) == 0 {
 		return nil, "", errors.New("Yahoo Finance returned no valid closes")
 	}
-	return prices, "Yahoo Finance monthly closes", nil
+	return prices, "Yahoo Finance monthly close and adjusted close", nil
 }
 
 type PolygonMarket struct {
@@ -406,11 +432,19 @@ func enrichMarket(equity *model.Equity, prices []model.PricePoint) {
 		}
 		equity.Current.Low52Week = floatPtr(low)
 		equity.Current.High52Week = floatPtr(high)
-		if oneYear[0].Close > 0 {
-			equity.Current.Return1Y = floatPtr(latest.Close/oneYear[0].Close - 1)
+		startReturn, endReturn := returnClose(oneYear[0]), returnClose(latest)
+		if startReturn > 0 && endReturn > 0 {
+			equity.Current.Return1Y = floatPtr(endReturn/startReturn - 1)
 		}
 	}
 	equity.Prices = downsampleMonthly(prices)
+}
+
+func returnClose(point model.PricePoint) float64 {
+	if point.TotalReturnClose != nil && *point.TotalReturnClose > 0 {
+		return *point.TotalReturnClose
+	}
+	return point.Close
 }
 
 func priceOnOrBefore(prices []model.PricePoint, date string) (float64, bool) {

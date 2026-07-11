@@ -18,16 +18,25 @@ type qualityInputs struct {
 func enrichQuality(equity *model.Equity) {
 	equity.Qualities = nil
 	quarters := equity.Quarterlies
-	quarterlyPoints := make([]model.QualityPoint, 0, len(quarters))
+	quarterlyByDate := make(map[string]model.QualityPoint, len(quarters))
 	for index := 3; index < len(quarters); index++ {
-		trailing := quarterQualityInputs(quarters[index-3 : index+1])
+		window := quarters[index-3 : index+1]
+		if !consecutiveQuarterWindow(window) {
+			continue
+		}
+		trailing := quarterQualityInputs(window)
 		var previous qualityInputs
-		if index >= 7 {
+		if index >= 7 && consecutiveQuarterWindow(quarters[index-7:index-3]) {
 			previous = quarterQualityInputs(quarters[index-7 : index-3])
 		}
 		date := availableDate(quarters[index].FiledAt, quarters[index].PeriodEnd)
-		quarterlyPoints = append(quarterlyPoints, qualityPoint(date, trailing, previous))
+		quarterlyByDate[date] = qualityPoint(date, trailing, previous)
 	}
+	quarterlyPoints := make([]model.QualityPoint, 0, len(quarterlyByDate))
+	for _, point := range quarterlyByDate {
+		quarterlyPoints = append(quarterlyPoints, point)
+	}
+	sort.Slice(quarterlyPoints, func(i, j int) bool { return quarterlyPoints[i].Date < quarterlyPoints[j].Date })
 
 	firstQuarterlyDate := ""
 	if len(quarterlyPoints) > 0 {
@@ -53,7 +62,7 @@ func enrichQuality(equity *model.Equity) {
 	equity.Qualities = append(equity.Qualities, quarterlyPoints...)
 	sort.Slice(equity.Qualities, func(i, j int) bool { return equity.Qualities[i].Date < equity.Qualities[j].Date })
 
-	if len(quarters) < 4 {
+	if len(quarters) < 4 || !consecutiveQuarterWindow(quarters[len(quarters)-4:]) {
 		return
 	}
 	recent := quarterQualityInputs(quarters[len(quarters)-4:])

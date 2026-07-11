@@ -17,6 +17,7 @@ describe("regime outcomes", () => {
     expect(stats.some((row) => row.horizon === 12 && row.count > 0)).toBe(true);
     expect(stats.some((row) => row.worstDrawdown < 0)).toBe(true);
     expect(stats.every((row) => row.startDate >= points[0] && row.endDate <= points.at(-1)!)).toBe(true);
+		expect(stats.every((row) => row.adjustedPValue >= 0 && row.adjustedPValue <= 1)).toBe(true);
     expect(currentRegime(country)).toBe("Inflationary growth");
   });
 
@@ -33,6 +34,23 @@ describe("regime outcomes", () => {
     expect(stats.some((row) => row.regime === "Disinflationary growth")).toBe(false);
   });
 
+  it("uses non-overlapping starts for every forward horizon", () => {
+    const points = monthlyDates("2018-01-01", 84);
+    const country: CountrySeries = {
+      code: "US", name: "United States", currency: "USD", region: "Americas", policyLabel: "Fed", fxLabel: "USD",
+      points: points.map((date) => ({ date, inflation: 2, industrialGrowth: 1 })),
+    };
+    const asset: AssetSeries = {
+      symbol: "SPY", label: "US equities", group: "Equities",
+      points: points.map((date, index) => ({ date, close: 100 + index })),
+    };
+    const stats = regimeOutcomes([asset], country, [Date.parse(points[0]), Date.parse(points.at(-1)!)]);
+    const count = (horizon: 3 | 6 | 12) => stats.find((row) => row.horizon === horizon)?.count;
+    expect(count(3)).toBe(27);
+    expect(count(6)).toBe(13);
+    expect(count(12)).toBe(6);
+  });
+
   it("fits directional factor sensitivities from observations", () => {
     const rows: CalibrationRow[] = Array.from({ length: 72 }, (_, index) => {
       const factors = {
@@ -47,6 +65,8 @@ describe("regime outcomes", () => {
     expect(model.exposures.inflation).toBeLessThan(0);
     expect(model.exposures.realRate).toBeLessThan(0);
     expect(model.exposures.liquidity).toBeGreaterThan(0);
+		expect(model.stability).toBeGreaterThan(.8);
+		expect(model.uncertainty.growth).toBeGreaterThanOrEqual(0);
   });
 });
 

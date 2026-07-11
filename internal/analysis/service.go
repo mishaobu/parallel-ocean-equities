@@ -20,6 +20,18 @@ type Analyzer interface {
 	Analyze(context.Context, string, *model.Equity) (*model.Equity, error)
 }
 
+type TickerPreview struct {
+	Ticker         string `json:"ticker"`
+	Company        string `json:"company"`
+	InstrumentType string `json:"instrumentType"`
+	CIK            string `json:"cik,omitempty"`
+	Source         string `json:"source"`
+}
+
+type TickerPreviewer interface {
+	PreviewTicker(context.Context, string) (TickerPreview, error)
+}
+
 type Stats struct {
 	RefreshTotal     int64     `json:"refreshTotal"`
 	RefreshFailures  int64     `json:"refreshFailures"`
@@ -87,6 +99,18 @@ func (s *Service) AddTicker(ticker string) error {
 		return errors.New("ticker refresh is already queued")
 	}
 	return nil
+}
+
+func (s *Service) PreviewTicker(ctx context.Context, ticker string) (TickerPreview, error) {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if !tickerPattern.MatchString(ticker) {
+		return TickerPreview{}, errors.New("ticker must be 1-10 letters, numbers, dots, or hyphens")
+	}
+	previewer, ok := s.analyzer.(TickerPreviewer)
+	if !ok {
+		return TickerPreview{}, errors.New("ticker preview is unavailable")
+	}
+	return previewer.PreviewTicker(ctx, ticker)
 }
 
 func (s *Service) DeleteTicker(ticker string) error {

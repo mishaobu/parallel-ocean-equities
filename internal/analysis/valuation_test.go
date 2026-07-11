@@ -124,6 +124,24 @@ func TestEnrichValuationHistoryUsesFilingDatesAndOlderAnnualInputs(t *testing.T)
 	assertClose(t, "quarterly P/E", equity.Valuations[2].PE, 7.5)
 }
 
+func TestValuationHistoryCollapsesDuplicateFilingDates(t *testing.T) {
+	periods := []string{"2024-03-31", "2024-06-30", "2024-09-30", "2024-12-31", "2025-03-31"}
+	filed := []string{"2024-05-01", "2024-08-01", "2024-11-01", "2025-05-01", "2025-05-01"}
+	quarters := make([]model.QuarterlyPoint, len(periods))
+	for index := range periods {
+		quarters[index] = model.QuarterlyPoint{
+			PeriodEnd: periods[index], FiledAt: filed[index], RevenueB: floatPtr(10), NetIncomeB: floatPtr(1),
+			EBITB: floatPtr(2), EBITDAB: floatPtr(3), OperatingCashB: floatPtr(2), FCFB: floatPtr(1),
+			DilutedSharesB: floatPtr(1), NetDebtB: floatPtr(0),
+		}
+	}
+	equity := &model.Equity{Ticker: "TEST", Quarterlies: quarters}
+	enrichValuationHistory(equity, []model.PricePoint{{Date: "2025-04-30", Close: 10}})
+	if len(equity.Valuations) != 1 || equity.Valuations[0].Date != "2025-05-01" {
+		t.Fatalf("duplicate filing dates were not collapsed: %#v", equity.Valuations)
+	}
+}
+
 func TestNormalizePerShareInputsRepairsInconsistentSECPerShareFacts(t *testing.T) {
 	equity := &model.Equity{
 		Annuals: []model.AnnualPoint{

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,9 @@ func (f *fakeService) DeleteTicker(string) error     { return nil }
 func (f *fakeService) Queue(string) bool             { return true }
 func (f *fakeService) RefreshAll() int               { return 1 }
 func (f *fakeService) AddTicker(ticker string) error { f.added = ticker; return nil }
+func (f *fakeService) PreviewTicker(_ context.Context, ticker string) (analysis.TickerPreview, error) {
+	return analysis.TickerPreview{Ticker: ticker, Company: "Preview Co", InstrumentType: "US equity", Source: "test"}, nil
+}
 
 func TestBasePathAndTickerAPI(t *testing.T) {
 	dir := t.TempDir()
@@ -51,6 +55,7 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 		Points:    []model.MacroPoint{{Date: "2026-01-01", Inflation: floatPtr(3), CoreInflation: floatPtr(2.5)}},
 		Countries: []model.CountrySeries{{Code: "US", Name: "United States"}},
 		Assets:    []model.AssetSeries{{Symbol: "SPY", Label: "US large cap"}},
+		Options:   model.OptionsSeries{Snapshots: []model.OptionSnapshot{{Ticker: "SPY", AsOf: "2026-01-01"}}},
 	}
 	service := &fakeService{state: state}
 	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir, MacroPath: "/macro", MacroStaticDir: macroDir}).Handler()
@@ -75,6 +80,17 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || !bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
 		t.Fatalf("overview should omit quarterlies and retain compact prices: %d %s", resp.Code, resp.Body.String())
 	}
+	etag := resp.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("state response has no ETag")
+	}
+	req = httptest.NewRequest(http.MethodGet, "/equities/api/state", nil)
+	req.Header.Set("If-None-Match", etag)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusNotModified || resp.Body.Len() != 0 {
+		t.Fatalf("conditional response: %d %s", resp.Code, resp.Body.String())
+	}
 	if bytes.Contains(resp.Body.Bytes(), []byte("coreInflation")) {
 		t.Fatalf("equities overview should use compact macro fields: %s", resp.Body.String())
 	}
@@ -94,6 +110,12 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("countries")) || !bytes.Contains(resp.Body.Bytes(), []byte("assets")) {
 		t.Fatalf("macro state should include countries and cross-assets: %d %s", resp.Code, resp.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/macro/api/state?view=options", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("snapshots")) || bytes.Contains(resp.Body.Bytes(), []byte("assets")) || bytes.Contains(resp.Body.Bytes(), []byte("points")) {
+		t.Fatalf("options scope: %d %s", resp.Code, resp.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN", nil)

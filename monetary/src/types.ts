@@ -101,7 +101,7 @@ export interface CountrySeries {
   points?: CountryPoint[];
 }
 
-export interface PricePoint { date: string; close: number }
+export interface PricePoint { date: string; close: number; totalReturnClose?: number }
 export interface ValuationPoint {
   date: string;
   pe?: number;

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { formatQuality, qualityRows, type QualityMetricKey } from "../qualityData";
 import type { Equity } from "../types";
+import { historyPercentile, peerGroup, peerMedian } from "../peerData";
 
 type SortKey = "ticker" | QualityMetricKey;
 type SortDirection = "asc" | "desc";
@@ -20,8 +21,8 @@ export function QualityMatrix({ equities }: { equities: Equity[] }) {
       <th className="ticker-column"><SortButton label="Ticker" sortKey="ticker" sort={sort} onSort={changeSort} /></th>
       {qualityRows.map((row) => <th key={row.key}><SortButton label={row.label} sortKey={row.key} sort={sort} onSort={changeSort} /></th>)}
     </tr></thead><tbody>{sorted.map((equity) => <tr key={equity.ticker}>
-      <th className="ticker-column"><strong>{equity.ticker}</strong><span>{equity.company}</span></th>
-      {qualityRows.map((row) => <td key={`${equity.ticker}-${row.key}`}><strong>{formatQuality(equity.quality?.[row.property], row.kind)}</strong></td>)}
+      <th className="ticker-column"><strong>{equity.ticker}</strong><span>{equity.company}</span><small>{peerGroup(equity)} / LTM {equity.quality?.asOf?.slice(0, 10) ?? "n/a"}</small></th>
+		{qualityRows.map((row) => { const value = equity.quality?.[row.property]; const median = peerMedian(equities, equity, (candidate) => candidate.quality?.[row.property]); const percentile = historyPercentile(equity.qualities, row.property, value); return <td key={`${equity.ticker}-${row.key}`}><strong>{formatQuality(value, row.kind)}</strong><small>{median === undefined ? "Peer n/a" : `Peer ${formatQuality(median, row.kind)}`} / {percentile === undefined ? "Hist n/a" : `Hist P${percentile}`}</small></td>; })}
     </tr>)}</tbody></table>
   </div>;
 }

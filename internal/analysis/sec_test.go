@@ -98,6 +98,28 @@ func TestDurationQuarterFactsPreservesComparativePeriodsByEndDate(t *testing.T) 
 	assertQuarterFact(t, "current Q1", values["2025-09-30"], 7e9)
 }
 
+func TestFiscalPeriodForEndUsesCompanyYearEndInsteadOfComparativeFilingMetadata(t *testing.T) {
+	tests := []struct {
+		end         string
+		yearEnd     time.Month
+		wantYear    int
+		wantQuarter string
+	}{
+		{end: "2016-12-31", yearEnd: time.December, wantYear: 2016, wantQuarter: "Q4"},
+		{end: "2017-09-30", yearEnd: time.December, wantYear: 2017, wantQuarter: "Q3"},
+		{end: "2024-09-30", yearEnd: time.June, wantYear: 2025, wantQuarter: "Q1"},
+		{end: "2025-06-30", yearEnd: time.June, wantYear: 2025, wantQuarter: "Q4"},
+		{end: "2025-02-01", yearEnd: time.January, wantYear: 2025, wantQuarter: "Q4"},
+		{end: "2025-01-04", yearEnd: time.December, wantYear: 2025, wantQuarter: "Q4"},
+	}
+	for _, test := range tests {
+		year, quarter := fiscalPeriodForEnd(test.end, test.yearEnd)
+		if year != test.wantYear || quarter != test.wantQuarter {
+			t.Fatalf("%s year-end=%s: got FY%d %s, want FY%d %s", test.end, test.yearEnd, year, quarter, test.wantYear, test.wantQuarter)
+		}
+	}
+}
+
 func TestExtractQuarterliesUsesCombinedShortAndLongTermDebt(t *testing.T) {
 	response := companyFacts{Facts: map[string]map[string]factConcept{"us-gaap": {
 		"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(

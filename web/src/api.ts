@@ -21,6 +21,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   state: () => request<StateResponse>("/state"),
   equity: (ticker: string) => request<Equity>(`/tickers/${encodeURIComponent(ticker)}`),
+	previewTicker: (ticker: string) => request<{ ticker: string; company: string; instrumentType: string; cik?: string; source: string }>(`/tickers/${encodeURIComponent(ticker)}/preview`),
   addTicker: (ticker: string) => request<{ ticker: string; status: string }>("/tickers", {
     method: "POST",
     body: JSON.stringify({ ticker }),

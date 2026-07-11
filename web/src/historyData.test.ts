@@ -27,13 +27,24 @@ describe("historical chart data", () => {
     expect(domain[1]).toBe(Date.parse("2026-07-10T00:00:00Z"));
   });
 
-  it("indexes each price history to a 1x wealth multiple in range", () => {
+	it("indexes each price history to a 1x wealth multiple in range", () => {
     const rows = indexedPerformanceRows(equities, [Date.parse("2000-01-01"), Date.parse("2026-01-01")]);
     expect(rows).toEqual([
       { date: Date.parse("2005-01-01"), AMZN: 1 },
       { date: Date.parse("2020-01-01"), AMZN: 3 },
     ]);
-  });
+	});
+
+	it("uses a common start and adjusted return closes across instruments", () => {
+		const rows = indexedPerformanceRows([
+			{ ...equities[0], ticker: "OLD", prices: [{ date: "2000-01-01", close: 10, totalReturnClose: 5 }, { date: "2010-01-01", close: 20, totalReturnClose: 15 }, { date: "2020-01-01", close: 30, totalReturnClose: 30 }] },
+			{ ...equities[0], ticker: "NEW", prices: [{ date: "2010-01-01", close: 50, totalReturnClose: 40 }, { date: "2020-01-01", close: 60, totalReturnClose: 60 }] },
+		], [Date.parse("2000-01-01"), Date.parse("2020-01-01")]);
+		expect(rows).toEqual([
+			{ date: Date.parse("2010-01-01"), OLD: 1, NEW: 1 },
+			{ date: Date.parse("2020-01-01"), OLD: 2, NEW: 1.5 },
+		]);
+	});
 
   it("uses actual valuation coverage for the max valuation domain", () => {
     const domain = valuationHistoryDomain(equities, "max", new Date("2026-07-10T00:00:00Z"));

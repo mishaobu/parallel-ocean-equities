@@ -1,18 +1,18 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter, type SharedChartRange, type SharedLegendFilter } from "../chartInteraction";
 import { equityColor } from "../colors";
 import { descendingTooltipItem } from "../chartData";
 import { indexedPerformanceRows } from "../historyData";
 import type { Equity } from "../types";
 
-export function PerformanceChart({ equities, domain }: { equities: Equity[]; domain: [number, number] }) {
+export function PerformanceChart({ equities, domain, zoom, onZoom, hiddenKeys, onHiddenKeys }: { equities: Equity[]; domain: [number, number] } & SharedChartRange & SharedLegendFilter) {
   const data = indexedPerformanceRows(equities, domain);
   const keys = equities.map((equity) => equity.ticker);
-  const legend = useLegendFilter(keys);
-  const chart = useChartZoom(domain, 20*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { log: true });
+  const legend = useLegendFilter(keys, hiddenKeys, onHiddenKeys);
+  const chart = useChartZoom(domain, 20*24*60*60*1000, zoom, onZoom);
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { log: true });
   return <div className="chart chart-primary performance-chart">
-    <div className="chart-heading"><strong>Indexed performance</strong><ChartHeadingMeta unit="each starts at 1.0x / log scale" zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} /></div>
+    <div className="chart-heading"><strong>Indexed total return</strong><ChartHeadingMeta unit="common start / 1.0x / log scale" zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} /></div>
     <div className="chart-canvas">
       {data.length === 0 ? <div className="chart-empty">Market history refresh pending</div> : <ResponsiveContainer width="100%" height="100%">
         <LineChart className="interactive-chart" data={data} margin={{ top: 14, right: 18, bottom: 2, left: 2 }} onMouseDown={chart.start} onMouseMove={chart.move} onMouseUp={chart.finish} onMouseLeave={chart.finish}>

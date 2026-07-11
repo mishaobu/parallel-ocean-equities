@@ -1,41 +1,34 @@
 import { CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { ChartHeadingMeta, fittedYDomain, useChartZoom, useLegendFilter } from "../chartInteraction";
+import { ChartHeadingMeta, useChartZoom, useFittedYDomain, useLegendFilter, type SharedChartRange, type SharedLegendFilter } from "../chartInteraction";
 import { valuationHistoryRows, type HistoryBasis } from "../historyData";
 import { equityColor } from "../colors";
 import { descendingTooltipItem } from "../chartData";
 import type { Equity } from "../types";
 import { formatValuation, valuationRows, type ValuationMetricKey, type ValuationRow } from "../valuationData";
 
-interface Props {
+interface Props extends SharedChartRange, SharedLegendFilter {
   equities: Equity[];
   metric: ValuationMetricKey;
   basis: HistoryBasis;
   domain: [number, number];
 }
 
-export function ValuationHistoryCharts({ equities, metric, basis, domain }: Props) {
+export function ValuationHistoryCharts({ equities, metric, basis, domain, zoom, onZoom, hiddenKeys, onHiddenKeys }: Props) {
   const primary = valuationRows.find((row) => row.key === metric) ?? valuationRows[0];
-  return <>
-    <ValuationHistoryChart equities={equities} metric={primary} basis={basis} domain={domain} />
-    <div className="small-multiples valuation-grid">
-      {valuationRows.filter((row) => row.key !== primary.key).map((row) => (
-        <ValuationHistoryChart key={row.key} equities={equities} metric={row} basis={basis} domain={domain} compact />
-      ))}
-    </div>
-  </>;
+  return <ValuationHistoryChart equities={equities} metric={primary} basis={basis} domain={domain} zoom={zoom} onZoom={onZoom} hiddenKeys={hiddenKeys} onHiddenKeys={onHiddenKeys} />;
 }
 
-function ValuationHistoryChart({ equities, metric, basis, domain, compact = false }: { equities: Equity[]; metric: ValuationRow; basis: HistoryBasis; domain: [number, number]; compact?: boolean }) {
+function ValuationHistoryChart({ equities, metric, basis, domain, compact = false, zoom, onZoom, hiddenKeys, onHiddenKeys }: { equities: Equity[]; metric: ValuationRow; basis: HistoryBasis; domain: [number, number]; compact?: boolean } & SharedChartRange & SharedLegendFilter) {
   const data = valuationHistoryRows(equities, metric, basis, domain);
   const keys = equities.map((equity) => equity.ticker);
-  const legend = useLegendFilter(keys);
-  const chart = useChartZoom(domain, 20*24*60*60*1000);
-  const fitted = fittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "yield" || metric.kind === "leverage" });
+  const legend = useLegendFilter(keys, hiddenKeys, onHiddenKeys);
+  const chart = useChartZoom(domain, 20*24*60*60*1000, zoom, onZoom);
+  const fitted = useFittedYDomain(data, chart.activeDomain, legend.visibleKeys, "date", { includeZero: metric.kind === "yield" || metric.kind === "leverage" });
   return (
     <div className={`chart history-chart${compact ? " chart-compact" : " chart-primary"}`}>
       <div className="chart-heading">
         <strong>{metric.label}</strong>
-        <ChartHeadingMeta unit={`${basis === "actual" ? "LTM at filing" : "Next 12m realized"} / ${metric.kind === "yield" ? "percent" : "multiple"}`} zoom={chart.zoom} onReset={chart.reset} clipped={fitted.clipped} />
+        <ChartHeadingMeta unit={`${basis === "actual" ? "LTM at filing" : "Next 12m realized"} / ${metric.kind === "yield" ? "percent" : "multiple"}`} zoom={chart.zoom} onReset={chart.reset} clippedCount={fitted.clippedCount} includeOutliers={fitted.includeOutliers} onToggleOutliers={fitted.toggleOutliers} />
       </div>
       <div className="chart-canvas">
         {data.length === 0 ? <ChartEmpty /> : <ResponsiveContainer width="100%" height="100%">

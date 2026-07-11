@@ -7,10 +7,10 @@ export function PillarStrip({ pillars }: { pillars: PillarSnapshot[] }) {
       const Direction = pillar.change === undefined || Math.abs(pillar.change) < 0.05 ? ArrowRight : pillar.change > 0 ? ArrowUp : ArrowDown;
       return <article key={pillar.key} className={`pillar pillar-${pillar.key}`}>
         <div className="pillar-heading"><span>{pillar.label}</span><b>{pillar.signal}</b></div>
-        <div className="pillar-value"><strong>{formatValue(pillar.value, pillar.unit)}</strong><span><Direction size={13} />{formatChange(pillar.change)}</span></div>
+		<div className="pillar-value"><strong title={pillar.valueLabel}>{formatValue(pillar.value, pillar.unit)}</strong><span><Direction size={13} />{formatChange(pillar.change)}</span></div>
         <div className="pillar-gauge"><i style={{ width: `${clamp(pillar.percentile ?? 50, 0, 100)}%` }} /></div>
-        <div className="pillar-meta"><span>P{pillar.percentile === undefined ? "--" : Math.round(pillar.percentile)}</span><span>{pillar.date?.slice(0, 7) ?? "unavailable"}{pillar.ageMonths > 0 ? ` / ${pillar.ageMonths}m lag` : ""}</span></div>
-        <small>{pillar.detail}</small>
+        <div className="pillar-meta"><span>P{pillar.percentile === undefined ? "--" : Math.round(pillar.percentile)}</span><span>Composite through {pillar.date?.slice(0, 7) ?? "unavailable"}{pillar.ageMonths > 0 ? ` / ${pillar.ageMonths}m lag` : ""}</span></div>
+		<small>{pillar.valueLabel}{pillar.valueDate ? ` (${pillar.valueDate.slice(0, 7)})` : ""} / {pillar.detail}</small>
       </article>;
     })}
   </section>;

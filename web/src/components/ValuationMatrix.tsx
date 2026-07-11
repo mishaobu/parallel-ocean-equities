@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import type { Equity } from "../types";
 import { formatValuation, valuationRows, type ValuationMetricKey, type ValuationRow } from "../valuationData";
+import { historyPercentile, peerGroup, peerMedian } from "../peerData";
 
 type ValuationBasis = "actual" | "forward";
 type SortKey = "ticker" | ValuationMetricKey;
@@ -39,8 +40,8 @@ export function ValuationMatrix({ equities }: { equities: Equity[] }) {
         </tr></thead>
         <tbody>
           {sorted.map((equity) => <tr key={equity.ticker}>
-            <th className="ticker-column"><strong>{equity.ticker}</strong><span>{equity.company}</span></th>
-            {valuationRows.map((row) => <td key={`${equity.ticker}-${row.key}`}><ValuationCell equity={equity} row={row} basis={sort.basis} /></td>)}
+            <th className="ticker-column"><strong>{equity.ticker}</strong><span>{equity.company}</span><small>{peerGroup(equity)} / {basisDates(equity)}</small></th>
+            {valuationRows.map((row) => <td key={`${equity.ticker}-${row.key}`}><ValuationCell equity={equity} equities={equities} row={row} basis={sort.basis} /></td>)}
           </tr>)}
         </tbody>
       </table>
@@ -48,15 +49,29 @@ export function ValuationMatrix({ equities }: { equities: Equity[] }) {
   </div>;
 }
 
-function ValuationCell({ equity, row, basis }: { equity: Equity; row: ValuationRow; basis: ValuationBasis }) {
+function ValuationCell({ equity, equities, row, basis }: { equity: Equity; equities: Equity[]; row: ValuationRow; basis: ValuationBasis }) {
   const primaryKey = row[basis];
   const secondaryKey = row[basis === "actual" ? "forward" : "actual"];
   const secondaryLabel = basis === "actual" ? "Model" : "LTM";
+	const primary = equity.valuation?.[primaryKey];
+	const median = peerMedian(equities, equity, (candidate) => candidate.valuation?.[primaryKey]);
+	const percentile = historyPercentile(equity.valuations, primaryKey as keyof NonNullable<Equity["valuations"]>[number], primary);
   return <div className="valuation-cell-values">
-    <strong>{formatValuation(equity.valuation?.[primaryKey], row.kind)}</strong>
+    <strong>{formatValuation(primary, row.kind)}</strong>
     <small>{secondaryLabel} {formatValuation(equity.valuation?.[secondaryKey], row.kind)}</small>
+		<small>{median === undefined ? "Peer n/a" : `Peer ${formatValuation(median, row.kind)}`} / {percentile === undefined ? "Hist n/a" : `Hist P${percentile}`}</small>
   </div>;
 }
+
+function basisDates(equity: Equity) {
+	const latest = equity.quarterlies?.at(-1);
+	const price = shortDate(equity.current.priceAsOf);
+	const period = shortDate(equity.valuation?.asOf || latest?.periodEnd);
+	const filing = shortDate(latest?.filedAt);
+	return `Price ${price} / period ${period} / filed ${filing}`;
+}
+
+function shortDate(value?: string) { return value ? value.slice(0, 10) : "n/a"; }
 
 function SortButton({ label, detail, sortKey, sort, onSort }: { label: string; detail?: string; sortKey: SortKey; sort: ValuationSort; onSort: (key: SortKey) => void }) {
   const active = sort.key === sortKey;

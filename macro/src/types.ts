@@ -18,7 +18,7 @@ export interface CountrySeries {
   sources?: string[]; warnings?: string[]; points?: CountryPoint[];
 }
 
-export interface PricePoint { date: string; close: number }
+export interface PricePoint { date: string; close: number; totalReturnClose?: number }
 export interface AssetSeries { symbol: string; label: string; group: string; region?: string; source?: string; points?: PricePoint[] }
 
 export interface MacroPoint {
@@ -55,7 +55,12 @@ export interface OptionSnapshot {
   skew30D?: number; expectedMove30D?: number; impliedRealizedSpread?: number;
   terms?: OptionTermPoint[];
 }
-export interface OptionsSeries { updatedAt?: string; asOf?: string; source?: string; warnings?: string[]; snapshots?: OptionSnapshot[] }
+export interface OptionHistoryPoint {
+	ticker: string; date: string; spot?: number; realizedVolatility20D?: number; atmIv30D?: number;
+	skew30D?: number; expectedMove30D?: number; impliedRealizedSpread?: number;
+}
+export interface OptionEvent { ticker: string; date: string; label: string }
+export interface OptionsSeries { updatedAt?: string; asOf?: string; source?: string; warnings?: string[]; snapshots?: OptionSnapshot[]; history?: OptionHistoryPoint[]; events?: OptionEvent[] }
 
 export interface StateResponse {
   state: { version: number; updatedAt: string; macro?: MacroSeries };

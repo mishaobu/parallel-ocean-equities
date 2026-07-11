@@ -50,6 +50,18 @@ func TestThetaOptionsClientBuildsBoundedSnapshot(t *testing.T) {
 	assertClose(t, "ATM IV", series.Snapshots[0].ATMIV30D, 0.195)
 	assertClose(t, "skew", series.Snapshots[0].Skew30D, 7)
 	assertClose(t, "straddle move", series.Snapshots[0].Terms[0].StraddleMove, 4.2)
+	if len(series.History) != 1 || series.History[0].Date != "2025-01-10" {
+		t.Fatalf("history = %#v", series.History)
+	}
+}
+
+func TestMergeOptionHistoryDeduplicatesTickerDate(t *testing.T) {
+	old := 20.0
+	fresh := 25.0
+	rows := mergeOptionHistory([]model.OptionHistoryPoint{{Ticker: "SPY", Date: "2025-01-10", ATMIV30D: &old}}, []model.OptionSnapshot{{Ticker: "SPY", AsOf: "2025-01-10", ATMIV30D: &fresh}})
+	if len(rows) != 1 || rows[0].ATMIV30D == nil || *rows[0].ATMIV30D != fresh {
+		t.Fatalf("rows = %#v", rows)
+	}
 }
 
 func TestThetaOptionsClientSkipsMarketWindow(t *testing.T) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, ArrowUpRight, BarChart3, Globe2, Landmark, LoaderCircle } from "lucide-react";
 import { coherentRegime, pillarSnapshots } from "./analysis";
+import type { RangeInteraction } from "./chartRange";
 import { getState } from "./api";
 import { DateInspector } from "./components/DateInspector";
 import { CountryAnalysis } from "./components/CountryAnalysis";
@@ -27,7 +28,7 @@ function App() {
   const [payload, setPayload] = useState<StateResponse>();
   const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState<MacroRange>("25y");
-  const [view, setView] = useState<AnalysisView>("overview");
+	const [view, setView] = useState<AnalysisView>(() => initialView());
   const [error, setError] = useState("");
   const [hoveredDate, setHoveredDate] = useState<number>();
   const [pinnedDate, setPinnedDate] = useState<number>();
@@ -44,38 +45,47 @@ function App() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 60_000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+	useEffect(() => {
+		void load();
+		const timer = window.setInterval(() => void load(), refreshing ? 15_000 : 300_000);
+		return () => window.clearInterval(timer);
+	}, [load, refreshing]);
 
   const macro = payload?.state.macro;
   const points = macro?.points ?? [];
-  const domain = useMemo(() => rangeDomain(points, range), [points, range]);
+	const baseDomain = useMemo(() => rangeDomain(points, range), [points, range]);
+	const [selectedDomain, setSelectedDomain] = useState<[number, number]>();
+	const domain = selectedDomain ?? baseDomain;
   const visiblePointCount = useMemo(() => points.filter((point) => { const date = Date.parse(point.date); return date >= domain[0] && date <= domain[1]; }).length, [domain, points]);
   const regime = useMemo(() => coherentRegime(points), [points]);
   const pillars = useMemo(() => pillarSnapshots(points, domain), [domain, points]);
   const selectedDate = pinnedDate ?? hoveredDate;
   const equities = payload?.state.tickers ?? {};
 
-  useEffect(() => {
-    if (equities[ticker] || Object.keys(equities).length === 0) return;
+	useEffect(() => {
+		if (equities[ticker] || Object.keys(equities).length === 0) return;
     setTicker(equities.SPY ? "SPY" : Object.keys(equities).sort()[0]);
-  }, [equities, ticker]);
+	}, [equities, ticker]);
+	useEffect(() => { setSelectedDomain(undefined); }, [baseDomain[0], baseDomain[1]]);
 
-  function selectTicker(next: string) {
+	function selectTicker(next: string) {
     setTicker(next);
     const url = new URL(window.location.href);
     url.searchParams.set("ticker", next);
     window.history.replaceState({}, "", url);
-  }
+	}
+	function selectView(next: AnalysisView) {
+		setView(next);
+		const url = new URL(window.location.href);
+		url.searchParams.set("view", next);
+		window.history.replaceState({}, "", url);
+	}
 
   function pinDate(date: number) {
     setPinnedDate((current) => current === date ? undefined : date);
   }
 
-  const interaction = { selectedDate, onInspect: pinnedDate === undefined ? setHoveredDate : undefined, onPin: pinDate };
+	const interaction = { selectedDate, onInspect: pinnedDate === undefined ? setHoveredDate : undefined, onPin: pinDate, rangeSelected: selectedDomain !== undefined, onSelectDomain: setSelectedDomain, onResetDomain: () => setSelectedDomain(undefined) };
 
   return <div className="macro-app">
     <header className="topbar">
@@ -84,23 +94,23 @@ function App() {
       <div className="status"><span className={refreshing ? "pulse" : ""} />{refreshing ? "Refreshing" : updatedLabel(macro?.updatedAt)}</div>
     </header>
 
-    {error && <div className="error-banner" role="alert">{error}</div>}
+	{error && <div className="error-banner" role="alert">{macro ? `Live refresh failed; showing the last completed dataset. ${error}` : error}</div>}
     <main>
       <section className="page-heading">
-        <div><span className="eyebrow"><Activity size={14} />{view === "countries" ? `${macro?.countries?.length ?? 0} monetary systems` : `US macro regime / ${regime.point?.date.slice(0, 7) ?? "pending"}`}</span><h1>{view === "countries" ? "Global monetary regimes" : regime.label}</h1><p>{domainLabel(domain)} / {view === "countries" ? "metric-level freshness" : `${visiblePointCount} monthly rows`} / {macro?.sources?.length ?? 0} US source series</p></div>
-        <div className="segmented" aria-label="Analysis range">
-          {ranges.map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
-        </div>
+		<div><span className="eyebrow"><Activity size={14} />{view === "countries" ? `${macro?.countries?.length ?? 0} monetary systems` : `US headline-CPI / industry regime / ${regime.point?.date.slice(0, 7) ?? "pending"}`}</span><h1>{view === "countries" ? "Global monetary regimes" : regime.label}</h1><p>{domainLabel(domain)} / {view === "countries" ? "metric-level freshness" : `${visiblePointCount} monthly rows / regime uses headline CPI; inflation pillar uses core CPI, shelter and wages`} / {macro?.sources?.length ?? 0} US source series</p></div>
+		<div className="range-tools"><div className="segmented" aria-label="Analysis range">
+			{ranges.map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)}>{value === "max" ? "Max" : value.toUpperCase()}</button>)}
+		</div><div className="date-range" aria-label="Custom analysis period"><label>From<input type="date" min={dateInput(baseDomain[0])} max={dateInput(domain[1])} value={dateInput(domain[0])} onChange={(event) => updateDomain(event.target.value, 0, domain, setSelectedDomain)} /></label><label>To<input type="date" min={dateInput(domain[0])} max={dateInput(baseDomain[1])} value={dateInput(domain[1])} onChange={(event) => updateDomain(event.target.value, 1, domain, setSelectedDomain)} /></label></div></div>
       </section>
 
       <nav className="analysis-nav" aria-label="Monetary analysis view">
-        {views.map((candidate) => <button type="button" key={candidate} className={view === candidate ? "is-active" : ""} onClick={() => setView(candidate)}>{labels[candidate]}</button>)}
+		{views.map((candidate) => <button type="button" key={candidate} className={view === candidate ? "is-active" : ""} onClick={(event) => { selectView(candidate); event.currentTarget.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" }); }}>{labels[candidate]}</button>)}
       </nav>
 
       {points.length === 0 ? <div className="loading"><LoaderCircle className="spin" size={22} /><span>Macro history refresh pending</span></div> : <>
         {view !== "countries" && <DateInspector points={points} date={selectedDate} pinned={pinnedDate !== undefined} onClear={() => setPinnedDate(undefined)} />}
         {view === "overview" && <Overview points={points} domain={domain} pillars={pillars} interaction={interaction} pinnedDate={pinnedDate} />}
-        {view === "countries" && <CountryAnalysis countries={macro?.countries ?? []} domain={domain} />}
+		{view === "countries" && <CountryAnalysis countries={macro?.countries ?? []} domain={domain} rangeSelected={interaction.rangeSelected} onSelectDomain={interaction.onSelectDomain} onResetDomain={interaction.onResetDomain} />}
         {view === "inflation" && <InflationView points={points} domain={domain} interaction={interaction} />}
         {view === "liquidity" && <LiquidityView points={points} domain={domain} interaction={interaction} />}
         {view === "rates" && <RatesView points={points} domain={domain} interaction={interaction} />}
@@ -115,7 +125,7 @@ function App() {
   </div>;
 }
 
-type Interaction = { selectedDate?: number; onInspect?: (date?: number) => void; onPin?: (date: number) => void };
+type Interaction = { selectedDate?: number; onInspect?: (date?: number) => void; onPin?: (date: number) => void } & RangeInteraction;
 
 function Overview({ points, domain, pillars, interaction, pinnedDate }: { points: MacroPoint[]; domain: [number, number]; pillars: ReturnType<typeof pillarSnapshots>; interaction: Interaction; pinnedDate?: number }) {
   return <>
@@ -211,6 +221,9 @@ const commoditySeries: SeriesSpec[] = [{ key: "oilPrice", label: "WTI crude", co
 const fiscalSeries: SeriesSpec[] = [{ key: "federalDebtToGdp", label: "Federal debt / GDP", color: colors.red }, { key: "dollarIndex", label: "Broad dollar", color: colors.blue, axis: "right" }];
 
 function domainLabel(domain: [number, number]) { return `${new Date(domain[0]).getUTCFullYear()}-${new Date(domain[1]).getUTCFullYear()}`; }
+function dateInput(value: number) { return new Date(value).toISOString().slice(0, 10); }
+function updateDomain(value: string, index: 0 | 1, domain: [number, number], update: (domain: [number, number]) => void) { const parsed = Date.parse(`${value}T00:00:00Z`); if (!Number.isFinite(parsed)) return; update(index === 0 ? [parsed, domain[1]] : [domain[0], parsed]); }
 function updatedLabel(value?: string) { if (!value) return "Waiting for data"; return `Updated ${new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`; }
+function initialView(): AnalysisView { const requested = new URLSearchParams(window.location.search).get("view") as AnalysisView | null; return requested && views.includes(requested) ? requested : "overview"; }
 
 export default App;
