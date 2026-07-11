@@ -5,11 +5,13 @@ import type { AssetSeries, StateResponse } from "./types";
 import { AssetTable } from "./components/AssetTable";
 import { DivergenceMap, SeriesChart, type LineSpec } from "./components/Charts";
 import { CountryMatrix, CountryRanks } from "./components/Matrix";
+import { OutcomesLab } from "./components/Outcomes";
 import { neutralScenario, ScenarioLab } from "./components/Scenario";
+import { currentRegime, regimeOutcomes } from "./outcomes";
 
-const views = ["overview", "countries", "assets", "relative", "scenarios"] as const;
+const views = ["overview", "countries", "assets", "outcomes", "relative", "scenarios"] as const;
 type View = typeof views[number];
-const labels: Record<View, string> = { overview: "Overview", countries: "Countries", assets: "Cross-asset", relative: "Relative policy", scenarios: "Scenarios" };
+const labels: Record<View, string> = { overview: "Overview", countries: "Countries", assets: "Cross-asset", outcomes: "Outcomes", relative: "Relative policy", scenarios: "Scenarios" };
 const ranges: Range[] = ["max", "20y", "10y", "5y", "3y", "1y"];
 const colors = ["#3975a7", "#b8493e", "#347b57", "#b2832e", "#765997", "#31838a", "#a34e73", "#596b62", "#c05d32", "#4e7590", "#87924b", "#6f5347"];
 
@@ -42,6 +44,9 @@ function App() {
   const lineSpecs = useMemo(() => assetSpecs(assets, selectedAssets), [assets, selectedAssets]);
   const activeCountry = countryRows.find((row) => row.country.code === selectedCountry) ?? countryRows[0];
   const signals = useMemo(() => globalSignals(countryRows, returns), [countryRows, returns]);
+  const usCountry = countries.find((country) => country.code === "US");
+  const outcomes = useMemo(() => regimeOutcomes(assets, usCountry, domain), [assets, domain, usCountry]);
+  const activeRegime = useMemo(() => currentRegime(usCountry), [usCountry]);
 
   useEffect(() => {
     if (!activeCountry || activeCountry.country.code === selectedCountry) return;
@@ -57,8 +62,9 @@ function App() {
         {view === "overview" && <Overview rows={countryRows} signals={signals} indexed={indexed} domain={domain} series={lineSpecs} />}
         {view === "countries" && <CountriesView rows={countryRows} selected={activeCountry?.country.code} onSelect={selectCountry} domain={domain} />}
         {view === "assets" && <AssetsView assets={assets} selected={selectedAssets} onSelected={setSelectedAssets} indexed={indexed} domain={domain} series={lineSpecs} returns={returns} />}
+        {view === "outcomes" && <OutcomesView stats={outcomes} current={activeRegime} />}
         {view === "relative" && <RelativeView rows={countryRows} domain={domain} />}
-        {view === "scenarios" && <ScenariosView assets={assets} values={scenario} onChange={setScenario} />}
+        {view === "scenarios" && <ScenariosView assets={assets} points={macro.points ?? []} domain={domain} values={scenario} onChange={setScenario} />}
       </>}
       <div className="data-basis"><strong>Data basis</strong><span>{macro?.basis ?? "Latest revised observations."} Country cells use their own observation dates; cross-country policy definitions and publication lags differ.</span></div>
       {!!macro?.warnings?.length && <details className="warnings"><summary>{macro.warnings.length} source warnings</summary>{macro.warnings.map((warning) => <span key={warning}>{warning}</span>)}</details>}
@@ -87,7 +93,9 @@ function RelativeView({ rows, domain }: { rows: ReturnType<typeof snapshots>; do
   return <><section className="relative-grid"><SeriesChart title="Nominal policy divergence" note="Policy or short-rate proxy, as labeled by economy" rows={countryMetricRows(countries, "policyRate", domain)} domain={domain} series={specs} /><SeriesChart title="Real policy divergence" note="Nominal policy less headline inflation" rows={countryMetricRows(countries, "realRate", domain)} domain={domain} series={specs} /><SeriesChart title="Inflation divergence" note="Headline consumer-price inflation" rows={countryMetricRows(countries, "inflation", domain)} domain={domain} series={specs} /><SeriesChart title="Yield-curve divergence" note="Long government rate less policy or short-rate proxy" rows={countryMetricRows(countries, "yieldCurve", domain)} domain={domain} series={specs} /></section><SectionTitle index="01" title="Current relative-value map" note="Restrictiveness and growth are measured on each economy's latest available date" /><DivergenceMap rows={rows} /><CountryMatrix rows={rows} compact /></>;
 }
 
-function ScenariosView({ assets, values, onChange }: { assets: AssetSeries[]; values: ScenarioInputs; onChange: (values: ScenarioInputs) => void }) { return <><SectionTitle index="01" title="Macro shock workbench" note="Translate a coherent growth, inflation, rates, dollar and liquidity view into relative asset sensitivities" /><ScenarioLab assets={assets} values={values} onChange={onChange} /></>; }
+function OutcomesView({ stats, current }: { stats: ReturnType<typeof regimeOutcomes>; current?: ReturnType<typeof currentRegime> }) { return <><SectionTitle index="01" title="What happened next" note="Cross-asset forward outcomes conditioned on the US growth-inflation regime available at each start" /><OutcomesLab stats={stats} current={current} /></>; }
+
+function ScenariosView({ assets, points, domain, values, onChange }: { assets: AssetSeries[]; points: NonNullable<StateResponse["state"]["macro"]>["points"]; domain: [number, number]; values: ScenarioInputs; onChange: (values: ScenarioInputs) => void }) { return <><SectionTitle index="01" title="Macro shock workbench" note="Translate a coherent growth, inflation, rates, dollar and liquidity view into relative asset sensitivities" /><ScenarioLab assets={assets} points={points ?? []} domain={domain} values={values} onChange={onChange} /></>; }
 
 function SectionTitle({ index, title, note }: { index: string; title: string; note: string }) { return <div className="section-title"><b>{index}</b><div><h2>{title}</h2><span>{note}</span></div></div>; }
 function countryRows(country: ReturnType<typeof snapshots>[number]["country"], domain: [number, number]) { return (country.points ?? []).map((point) => ({ ...point, timestamp: Date.parse(point.date) })).filter((point) => point.timestamp >= domain[0] && point.timestamp <= domain[1]); }

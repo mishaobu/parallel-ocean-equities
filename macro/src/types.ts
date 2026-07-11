@@ -21,9 +21,18 @@ export interface CountrySeries {
 export interface PricePoint { date: string; close: number }
 export interface AssetSeries { symbol: string; label: string; group: string; region?: string; source?: string; points?: PricePoint[] }
 
+export interface MacroPoint {
+  date: string;
+  inflation?: number;
+  industrialGrowth?: number;
+  realPolicyRate?: number;
+  dollarIndex?: number;
+  netLiquidityGrowth?: number;
+}
+
 export interface MacroSeries {
   updatedAt?: string; sources?: string[]; warnings?: string[]; error?: string; basis?: string;
-  points?: Array<Record<string, number | string>>;
+  points?: MacroPoint[];
   countries?: CountrySeries[]; assets?: AssetSeries[];
 }
 

@@ -101,7 +101,7 @@ export function countryMetricRows(countries: CountrySeries[], metric: CountryMet
 }
 
 export interface ScenarioInputs { growth: number; inflation: number; realRate: number; dollar: number; liquidity: number }
-const scenarioExposure: Record<string, ScenarioInputs> = {
+export const scenarioExposure: Record<string, ScenarioInputs> = {
   SPY: { growth: .8, inflation: -.25, realRate: -.65, dollar: -.2, liquidity: .45 }, QQQ: { growth: .9, inflation: -.35, realRate: -1.05, dollar: -.15, liquidity: .65 },
   FEZ: { growth: .75, inflation: -.2, realRate: -.55, dollar: .25, liquidity: .4 }, EWU: { growth: .65, inflation: -.18, realRate: -.45, dollar: .2, liquidity: .35 }, EWJ: { growth: .7, inflation: -.15, realRate: -.5, dollar: .35, liquidity: .4 }, FXI: { growth: 1.15, inflation: -.1, realRate: -.35, dollar: -.55, liquidity: .8 },
   EEM: { growth: 1, inflation: -.15, realRate: -.45, dollar: -.7, liquidity: .65 }, ACWI: { growth: .8, inflation: -.22, realRate: -.6, dollar: -.1, liquidity: .45 },

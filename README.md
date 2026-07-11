@@ -25,7 +25,7 @@ Open `http://localhost:8080/equities/`.
 
 The monetary workspace is available at `http://localhost:8080/monetary/`. It uses the same persisted FRED and equity state through the equities API while keeping its own frontend bundle and route. Its views provide dated regime pillars, synchronized/pinnable chart inspection, historical episode comparison, native/change/z-score/percentile transforms, net-liquidity accounting, and release-lagged equity-regime outcomes. Historical FRED observations are latest-revised values rather than ALFRED vintages; the UI states this explicitly.
 
-The macro workspace is available at `http://localhost:8080/macro/`. It combines sortable country regime comparisons, regional policy divergence, indexed cross-asset histories, return boards, and a bounded directional scenario workbench. Scenario outputs are sensitivity scores, not forecast returns.
+The macro workspace is available at `http://localhost:8080/macro/`. It combines sortable country regime comparisons, regional policy divergence, indexed cross-asset histories, regime-conditioned forward outcomes, return boards, and calibrated plus structural scenario modes. Drag across any time-series chart to isolate a historical period and refit its axes to the visible observations. Outcome and calibrated-scenario calculations use quarterly-spaced starts with a conservative two-month macro availability lag; historical macro values remain latest-revised rather than ALFRED vintages.
 
 ## Configuration
 
