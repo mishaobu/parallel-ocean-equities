@@ -34,6 +34,9 @@ type LiveQuote struct {
 	LastDividendDate            string            `json:"lastDividendDate,omitempty"`
 	LastSplitFactor             string            `json:"lastSplitFactor,omitempty"`
 	LastSplitDate               string            `json:"lastSplitDate,omitempty"`
+	StockSplits                 []StockSplitEvent `json:"stockSplits,omitempty"`
+	StockSplitCoverageStart     string            `json:"stockSplitCoverageStart,omitempty"`
+	StockSplitCoverageComplete  bool              `json:"stockSplitCoverageComplete"`
 	MarketCapB                  *float64          `json:"marketCapB,omitempty"`
 	EnterpriseValueB            *float64          `json:"enterpriseValueB,omitempty"`
 	SharesOutstandingB          *float64          `json:"sharesOutstandingB,omitempty"`
@@ -46,6 +49,15 @@ type LiveQuote struct {
 	HistoryRefreshFailureKind string              `json:"historyRefreshFailureKind,omitempty"`
 	HistoryRefreshFailed      bool                `json:"historyRefreshFailed,omitempty"`
 	History                   []StatisticSnapshot `json:"history,omitempty"`
+}
+
+// StockSplitEvent is a validated Yahoo trading-effective split used to align
+// raw SEC instant share facts with Yahoo's split-adjusted price basis.
+type StockSplitEvent struct {
+	Date        string  `json:"date"`
+	Numerator   float64 `json:"numerator"`
+	Denominator float64 `json:"denominator"`
+	Ratio       float64 `json:"ratio"`
 }
 
 // StatisticSnapshot is one point-in-time quote-derived statistics observation.

@@ -271,11 +271,21 @@ export interface LiveQuote {
   lastDividendDate?: string;
   lastSplitFactor?: string;
   lastSplitDate?: string;
+  stockSplits?: StockSplitEvent[];
+  stockSplitCoverageStart?: string;
+  stockSplitCoverageComplete?: boolean;
   sharesOutstandingB?: number;
   shareBasisAsOf?: string;
   marketCapB?: number;
   enterpriseValueB?: number;
   history?: StatisticSnapshot[];
+}
+
+export interface StockSplitEvent {
+  date: string;
+  numerator: number;
+  denominator: number;
+  ratio: number;
 }
 
 export interface StatisticSnapshot {

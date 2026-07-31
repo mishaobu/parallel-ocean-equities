@@ -135,6 +135,32 @@ spec:
             summary: Quote-history cache is stale for {{ $labels.ticker }}
             description: The scheduler has used a history cache older than 36 hours for one hour.
 
+        - alert: EquitiesQuoteHistoryCacheUnavailable
+          expr: |
+            (
+              max by (namespace, ticker) (
+                equities_scheduled_snapshot_history_cache_status{
+                  namespace="equities",
+                  status="unavailable"
+                }
+              ) == 1
+            )
+            and on (namespace, ticker)
+            (
+              max by (namespace, ticker) (
+                equities_scheduled_snapshot_last_healthy_check_timestamp_seconds{
+                  namespace="equities"
+                }
+              ) > 0
+            )
+          for: 1h
+          labels:
+            severity: warning
+            service: parallel-ocean-equities
+          annotations:
+            summary: Quote-history cache is unavailable for {{ $labels.ticker }}
+            description: Current polling is healthy, but the ten-year history cache has remained unavailable for one hour.
+
         - alert: EquitiesQuoteFieldCoverageLow
           expr: |
             (
@@ -171,16 +197,43 @@ spec:
 
         - alert: EquitiesQuoteObservationMissingOrVeryOld
           expr: |
-            time()
-            - max by (namespace, ticker) (
+            (
+              max by (namespace, ticker) (
                 equities_scheduled_snapshot_last_observation_timestamp_seconds{
                   namespace="equities"
                 }
-              ) > 604800
+              ) == 0
+            )
+            or
+            (
+              (
+                time()
+                - max by (namespace, ticker) (
+                    equities_scheduled_snapshot_last_observation_timestamp_seconds{
+                      namespace="equities"
+                    }
+                  ) > 604800
+              )
+              and on (namespace, ticker)
+              (
+                max by (namespace, ticker) (
+                  equities_scheduled_snapshot_last_healthy_check_timestamp_seconds{
+                    namespace="equities"
+                  }
+                ) == 0
+                or
+                time()
+                - max by (namespace, ticker) (
+                    equities_scheduled_snapshot_last_healthy_check_timestamp_seconds{
+                      namespace="equities"
+                    }
+                  ) > 10800
+              )
+            )
           for: 30m
           labels:
             severity: critical
             service: parallel-ocean-equities
           annotations:
             summary: Quote observation is missing or over seven days old for {{ $labels.ticker }}
-            description: The ticker has never produced a provider observation, or its latest observation is over seven days old. The 30-minute hold gives newly added tickers time for their first scheduled capture.
+            description: The ticker has never produced a provider observation, or its latest observation is over seven days old while polling has also been unhealthy for three hours. The hold gives newly added tickers time for their first scheduled capture and avoids false pages during healthy exchange closures.

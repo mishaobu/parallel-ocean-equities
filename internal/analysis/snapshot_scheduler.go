@@ -291,9 +291,15 @@ func (s *QuoteSnapshotScheduler) applyResult(state *quoteSnapshotSchedule, resul
 		s.config.Logger.Warn("scheduled quote snapshot failed", "ticker", result.ticker, "error", result.err)
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(result.marketState), "REGULAR") {
+	marketState := strings.ToUpper(strings.TrimSpace(result.marketState))
+	if marketState == "REGULAR" || marketState == "PRE" {
 		state.needsPostCloseConfirm = true
 		state.nextDue = now.Add(s.config.RegularInterval)
+		return
+	}
+	if marketState != "POST" && marketState != "CLOSED" {
+		state.nextDue = now.Add(s.config.RetryInterval)
+		s.config.Logger.Warn("scheduled quote snapshot returned unknown market state", "ticker", result.ticker, "marketState", result.marketState)
 		return
 	}
 	if state.needsPostCloseConfirm {

@@ -623,7 +623,7 @@ func stockSplitEvents(gaap map[string]factConcept) []stockSplit {
 	}
 	unique := make(map[string]stockSplit)
 	for _, candidate := range concept.Units["pure"] {
-		if candidate.Val <= 1 || candidate.End == "" {
+		if candidate.Val <= 0 || candidate.Val == 1 || candidate.End == "" {
 			continue
 		}
 		key := fmt.Sprintf("%s/%g", candidate.End, candidate.Val)
