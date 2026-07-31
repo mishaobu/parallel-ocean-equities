@@ -31,16 +31,16 @@ export function ValuationWorkbench({ equity }: { equity: Equity }) {
     <>
       <div className="basis-strip">
         <Basis label="Price" value={money(equity.current.price)} />
-        <Basis label="Market cap" value={formatBillions(equity.valuation?.marketCapB)} />
+				<Basis label="Market cap (diluted shares)" value={formatBillions(equity.valuation?.marketCapB)} />
         <Basis label="Enterprise value" value={formatBillions(equity.valuation?.enterpriseValueB)} />
         <Basis label="Forward FCF" value={formatBillions(equity.forecast?.forwardFcfB)} />
         <Basis label="Net debt" value={formatBillions(equity.valuation?.netDebtB)} />
       </div>
       <div className="model-workbench">
-        <div className="model-tabs" aria-label="Valuation model">
-			<button type="button" className={model === "dcf" ? "is-active" : ""} onClick={() => setModel("dcf")} disabled={!viableModel("dcf", equity)} title={!viableModel("dcf", equity) ? "DCF requires positive forward free cash flow" : undefined}>DCF</button>
-			<button type="button" className={model === "multiple" ? "is-active" : ""} onClick={() => setModel("multiple")} disabled={!viableModel("multiple", equity)} title={!viableModel("multiple", equity) ? "EV / EBITDA requires positive forward EBITDA" : undefined}>EV / EBITDA</button>
-			<button type="button" className={model === "earnings" ? "is-active" : ""} onClick={() => setModel("earnings")} disabled={!viableModel("earnings", equity)} title={!viableModel("earnings", equity) ? "P/E requires positive forward EPS" : undefined}>P/E</button>
+			<div className="model-tabs" role="group" aria-label="Valuation model">
+				<button type="button" className={model === "dcf" ? "is-active" : ""} aria-pressed={model === "dcf"} onClick={() => setModel("dcf")} disabled={!viableModel("dcf", equity)} title={!viableModel("dcf", equity) ? "DCF requires positive forward free cash flow" : undefined}>DCF</button>
+				<button type="button" className={model === "multiple" ? "is-active" : ""} aria-pressed={model === "multiple"} onClick={() => setModel("multiple")} disabled={!viableModel("multiple", equity)} title={!viableModel("multiple", equity) ? "EV / EBITDA requires positive forward EBITDA" : undefined}>EV / EBITDA</button>
+				<button type="button" className={model === "earnings" ? "is-active" : ""} aria-pressed={model === "earnings"} onClick={() => setModel("earnings")} disabled={!viableModel("earnings", equity)} title={!viableModel("earnings", equity) ? "P/E requires positive forward EPS" : undefined}>P/E</button>
         </div>
         <div className="model-grid">
           <div className="model-controls">
@@ -67,7 +67,7 @@ export function ValuationWorkbench({ equity }: { equity: Equity }) {
             </table>
           </div>
         </div>
-        <div className="model-source"><span>Price {equity.current.priceAsOf ?? "n/a"} / fundamentals {equity.valuation?.asOf ?? equity.quarterlies?.at(-1)?.periodEnd ?? "n/a"} / filed {equity.quarterlies?.at(-1)?.filedAt ?? "n/a"}</span><span>{equity.forecast?.horizon ?? "Forward"} / {equity.forecast?.method ?? "Model inputs unavailable"}</span></div>
+				<div className="model-source"><span>Price {equity.current.priceAsOf ?? "n/a"} / fundamentals {equity.valuation?.asOf ?? equity.quarterlies?.at(-1)?.periodEnd ?? "n/a"} / filed {equity.quarterlies?.at(-1)?.filedAt ?? "n/a"}</span><span>Per-share and market-cap outputs use diluted shares / {equity.forecast?.horizon ?? "Forward"} / {equity.forecast?.method ?? "Model inputs unavailable"}</span></div>
       </div>
     </>
   );

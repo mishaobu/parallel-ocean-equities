@@ -29,6 +29,9 @@ func (f *fakeService) Snapshot() model.State {
 	_ = json.Unmarshal(data, &state)
 	return state
 }
+func (f *fakeService) Health() analysis.Health {
+	return analysis.Health{TickerCount: len(f.state.Tickers), UpdatedAt: f.state.UpdatedAt}
+}
 func (f *fakeService) Stats() analysis.Stats         { return f.stats }
 func (f *fakeService) DeleteTicker(string) error     { return nil }
 func (f *fakeService) Queue(string) bool             { return true }
@@ -66,7 +69,7 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 		Options:   model.OptionsSeries{Snapshots: []model.OptionSnapshot{{Ticker: "SPY", AsOf: "2026-01-01"}}},
 	}
 	service := &fakeService{state: state, quote: model.LiveQuote{Price: floatPtr(210.25), AsOf: "2026-07-31T14:30:00Z", Source: "fixture", History: []model.StatisticSnapshot{{AsOf: "2026-07-31T14:30:00Z", Source: "fixture", Numeric: map[string]float64{"price": 210.25, "market-cap": 3150}}}}}
-	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir, MacroPath: "/macro", MacroStaticDir: macroDir}).Handler()
+	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir, MacroPath: "/macro", MacroStaticDir: macroDir, AdminToken: "test-admin"}).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/equities/", nil)
 	resp := httptest.NewRecorder()
@@ -154,10 +157,114 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{"ticker": "NVDA"})
 	req = httptest.NewRequest(http.MethodPost, "/equities/api/tickers", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-admin")
 	resp = httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusAccepted || service.added != "NVDA" {
 		t.Fatalf("add response: %d ticker=%s body=%s", resp.Code, service.added, resp.Body.String())
+	}
+}
+
+func TestAdministrativeMutationsFailClosedAndAuthenticateBeforeLookup(t *testing.T) {
+	state := model.NewState()
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN"}
+	service := &fakeService{state: state}
+
+	disabled := New(service, Config{}).Handler()
+	req := httptest.NewRequest(http.MethodPost, "/internal/refresh", nil)
+	resp := httptest.NewRecorder()
+	disabled.ServeHTTP(resp, req)
+	if resp.Code != http.StatusServiceUnavailable || resp.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("disabled admin endpoint: status=%d cache=%q body=%s", resp.Code, resp.Header().Get("Cache-Control"), resp.Body.String())
+	}
+
+	secured := New(service, Config{AdminToken: "secret"}).Handler()
+	for _, target := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/internal/refresh"},
+		{http.MethodPost, "/equities/api/tickers"},
+		{http.MethodGet, "/equities/api/tickers/AAPL/preview"},
+		{http.MethodPost, "/equities/api/tickers/DOES-NOT-EXIST/refresh"},
+		{http.MethodDelete, "/equities/api/tickers/DOES-NOT-EXIST"},
+	} {
+		req = httptest.NewRequest(target.method, target.path, nil)
+		resp = httptest.NewRecorder()
+		secured.ServeHTTP(resp, req)
+		if resp.Code != http.StatusUnauthorized || resp.Header().Get("WWW-Authenticate") == "" {
+			t.Errorf("unauthenticated %s %s: status=%d headers=%v body=%s", target.method, target.path, resp.Code, resp.Header(), resp.Body.String())
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/internal/refresh", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	resp = httptest.NewRecorder()
+	secured.ServeHTTP(resp, req)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("authenticated refresh: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestLivenessIsCheapAndReadinessReflectsTrackedState(t *testing.T) {
+	service := &fakeService{state: model.NewState()}
+	handler := New(service, Config{}).Handler()
+	for _, check := range []struct {
+		path string
+		want int
+	}{
+		{"/healthz", http.StatusOK},
+		{"/readyz", http.StatusServiceUnavailable},
+	} {
+		req := httptest.NewRequest(http.MethodGet, check.path, nil)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req)
+		if resp.Code != check.want || resp.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: status=%d cache=%q body=%s", check.path, resp.Code, resp.Header().Get("Cache-Control"), resp.Body.String())
+		}
+	}
+	service.state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN"}
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("ready service: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestStaticFallbackRejectsMissingAssetsButKeepsSPARoutes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<main>app</main>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(&fakeService{state: model.NewState()}, Config{StaticDir: dir}).Handler()
+	for _, path := range []string{"/equities/assets/missing.js", "/equities/missing.css", "/equities/favicon.ico"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		resp := httptest.NewRecorder()
+		handler.ServeHTTP(resp, req)
+		if resp.Code != http.StatusNotFound || strings.Contains(resp.Body.String(), "<main>app</main>") {
+			t.Errorf("missing file %s: status=%d body=%q", path, resp.Code, resp.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/equities/compare", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "<main>app</main>") {
+		t.Fatalf("SPA route: status=%d body=%q", resp.Code, resp.Body.String())
+	}
+}
+
+func TestIfNoneMatchUsesWeakComparison(t *testing.T) {
+	current := `"abc123"`
+	for _, header := range []string{`"abc123"`, `W/"abc123"`, `"other", W/"abc123"`, `*`} {
+		if !ifNoneMatch(header, current) {
+			t.Errorf("expected %q to match %q", header, current)
+		}
+	}
+	for _, header := range []string{"", `W/"other"`, `"abc12"`} {
+		if ifNoneMatch(header, current) {
+			t.Errorf("expected %q not to match %q", header, current)
+		}
 	}
 }
 
@@ -179,6 +286,7 @@ func TestMetricsExposeBoundedScheduledSnapshotTelemetry(t *testing.T) {
 	now := time.Now().UTC()
 	state := model.NewState()
 	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN"}
+	state.Macro = model.MacroSeries{UpdatedAt: now.Add(-2 * time.Hour), LastSuccessAt: now.Add(-2 * time.Hour), LastAttemptAt: now.Add(-time.Hour), Error: "FRED unavailable"}
 	service := &fakeService{
 		state: state,
 		stats: analysis.Stats{
@@ -193,17 +301,23 @@ func TestMetricsExposeBoundedScheduledSnapshotTelemetry(t *testing.T) {
 			HistoryRefreshFailures: map[string]int64{
 				analysis.SnapshotFailureThrottled: 2,
 			},
+			BenchmarkHistoryRefreshFailures: map[string]int64{
+				analysis.SnapshotFailureUpstream: 1,
+			},
 			ScheduledQuoteFieldsExpected: 16,
 			ScheduledSnapshotObservations: map[string]analysis.SnapshotObservation{
 				"AMZN": {
-					LastSuccess:               now.Add(-25 * time.Minute),
-					LastHealthyCheck:          now.Add(-time.Minute),
-					LastObservation:           now.Add(-25 * time.Minute),
-					MarketState:               "regular",
-					QuoteFieldsPresent:        12,
-					HistoryCacheStatus:        "stale",
-					HistoryCacheAsOf:          now.Add(-13 * time.Hour),
-					HistoryRefreshFailureKind: analysis.SnapshotFailureThrottled,
+					LastSuccess:                        now.Add(-25 * time.Minute),
+					LastHealthyCheck:                   now.Add(-time.Minute),
+					LastObservation:                    now.Add(-25 * time.Minute),
+					MarketState:                        "regular",
+					QuoteFieldsPresent:                 12,
+					HistoryCacheStatus:                 "stale",
+					HistoryCacheAsOf:                   now.Add(-13 * time.Hour),
+					HistoryRefreshFailureKind:          analysis.SnapshotFailureThrottled,
+					BenchmarkHistoryCacheStatus:        "stale",
+					BenchmarkHistoryCacheAsOf:          now.Add(-14 * time.Hour),
+					BenchmarkHistoryRefreshFailureKind: analysis.SnapshotFailureUpstream,
 				},
 			},
 		},
@@ -223,9 +337,13 @@ func TestMetricsExposeBoundedScheduledSnapshotTelemetry(t *testing.T) {
 		"equities_scheduled_snapshot_attempts_total 9\n",
 		"equities_scheduled_snapshot_successes_total 5\n",
 		"equities_scheduled_snapshot_no_new_session_total 3\n",
+		"equities_macro_degraded 1\n",
+		"equities_macro_stale 0\n",
 		`equities_scheduled_snapshot_failures_total{reason="throttled"} 1`,
 		`equities_scheduled_snapshot_failures_total{reason="other"} 0`,
 		`equities_scheduled_snapshot_history_refresh_failures_total{reason="throttled"} 2`,
+		`equities_scheduled_snapshot_benchmark_history_refresh_failures_total{benchmark="SPY",reason="upstream"} 1`,
+		`equities_scheduled_snapshot_benchmark_history_cache_status{benchmark="SPY",status="stale"} 1`,
 		`equities_scheduled_snapshot_stale{ticker="AMZN",market_state="regular"} 1`,
 		`equities_scheduled_snapshot_quote_fields_present{ticker="AMZN"} 12`,
 		`equities_scheduled_snapshot_quote_fields_expected{ticker="AMZN"} 16`,

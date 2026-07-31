@@ -246,7 +246,9 @@ func (s *QuoteSnapshotScheduler) refreshBusy() bool {
 		return false
 	}
 	stats := reporter.Stats()
-	return stats.InFlight > 0 || stats.QueueDepth > 0 || stats.MacroRefreshing
+	// Macro data uses independent upstreams and persistence. A slow FRED/official
+	// data refresh must not suppress market-session quote capture.
+	return stats.InFlight > 0 || stats.QueueDepth > 0
 }
 
 func (s *QuoteSnapshotScheduler) deferDueSnapshots(states map[string]*quoteSnapshotSchedule, now time.Time) {

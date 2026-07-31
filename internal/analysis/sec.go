@@ -138,22 +138,28 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 	}
 	annuals = mergeEstimates(annuals, existing.Annuals)
 	result := &model.Equity{
-		Ticker:      strings.ToUpper(ticker),
-		Company:     facts.EntityName,
-		CIK:         cik,
-		Status:      "ready",
-		Sources:     []string{"SEC CompanyFacts"},
-		Annuals:     annuals,
-		Quarterlies: quarterlies,
-		Current:     existing.Current,
-		Prices:      existing.Prices,
-		Warnings:    warnings,
+		Ticker:               strings.ToUpper(ticker),
+		Company:              facts.EntityName,
+		CIK:                  cik,
+		Status:               "ready",
+		Sources:              []string{"SEC CompanyFacts"},
+		Annuals:              annuals,
+		Quarterlies:          quarterlies,
+		Current:              existing.Current,
+		Prices:               existing.Prices,
+		HistoricalPriceBasis: existing.HistoricalPriceBasis,
+		Warnings:             warnings,
 	}
 	result.Current.SharesOutstandingB = nil
 	result.Current.SharesOutstandingAsOf = ""
+	result.Current.SharesOutstandingSource = ""
 	if shares, ok := latestActualSharesOutstanding(facts); ok {
-		result.Current.SharesOutstandingB = floatPtr(shares.Val / 1e9)
-		result.Current.SharesOutstandingAsOf = shares.End
+		value := shares.Val / 1e9
+		if shares.Source != usGAAPActualSharesSource || comparableQuoteShares(value, latestEquityDilutedShares(result)) {
+			result.Current.SharesOutstandingB = floatPtr(value)
+			result.Current.SharesOutstandingAsOf = shares.End
+			result.Current.SharesOutstandingSource = shares.Source
+		}
 	}
 	if result.Company == "" {
 		result.Company = company.Title
@@ -169,42 +175,72 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 	return result, nil
 }
 
-func latestActualSharesOutstanding(response companyFacts) (fact, bool) {
-	dei := response.Facts["dei"]
-	concept, ok := dei["EntityCommonStockSharesOutstanding"]
-	if !ok {
-		return fact{}, false
-	}
+const (
+	deiActualSharesSource    = "SEC CompanyFacts dei:EntityCommonStockSharesOutstanding instant fact"
+	usGAAPActualSharesSource = "SEC CompanyFacts us-gaap:CommonStockSharesOutstanding instant fact"
+)
 
-	latest := fact{}
+type actualSharesFact struct {
+	fact
+	Source string
+}
+
+type actualSharesConcept struct {
+	concept factConcept
+	source  string
+}
+
+func actualSharesConcepts(response companyFacts) []actualSharesConcept {
+	concepts := make([]actualSharesConcept, 0, 2)
+	if concept, ok := response.Facts["dei"]["EntityCommonStockSharesOutstanding"]; ok {
+		concepts = append(concepts, actualSharesConcept{concept: concept, source: deiActualSharesSource})
+	}
+	if concept, ok := response.Facts["us-gaap"]["CommonStockSharesOutstanding"]; ok {
+		concepts = append(concepts, actualSharesConcept{concept: concept, source: usGAAPActualSharesSource})
+	}
+	return concepts
+}
+
+func latestActualSharesOutstanding(response companyFacts) (actualSharesFact, bool) {
+	// Prefer the freshest exact instant. DEI is authoritative when both concepts
+	// describe the same disclosure date; a newer us-gaap instant may safely win
+	// when an issuer has changed its tagging practice.
+	// Some issuers instead expose a non-dimensional exact balance-sheet instant
+	// under us-gaap:CommonStockSharesOutstanding. CompanyFacts does not preserve
+	// class dimensions, so class-level cover-page facts (for example META) must
+	// remain unavailable until a filing-level dimensional parser is configured.
+	latest := actualSharesFact{}
 	found := false
-	for _, candidate := range concept.Units["shares"] {
-		if !validActualSharesOutstandingFact(candidate) {
-			continue
-		}
-		if !found || candidate.End > latest.End || (candidate.End == latest.End && candidate.Filed > latest.Filed) {
-			latest = candidate
-			found = true
+	for _, sourced := range actualSharesConcepts(response) {
+		for _, candidate := range sourced.concept.Units["shares"] {
+			if !validActualSharesOutstandingFact(candidate) {
+				continue
+			}
+			if !found || candidate.End > latest.End || (candidate.End == latest.End && candidate.Filed > latest.Filed && latest.Source == sourced.source) {
+				latest = actualSharesFact{fact: candidate, Source: sourced.source}
+				found = true
+			}
 		}
 	}
 	return latest, found
 }
 
-func actualSharesOutstandingByAccession(response companyFacts) map[string]fact {
-	dei := response.Facts["dei"]
-	concept, ok := dei["EntityCommonStockSharesOutstanding"]
-	if !ok {
-		return nil
-	}
-
-	byAccession := make(map[string]fact)
-	for _, candidate := range concept.Units["shares"] {
-		if candidate.Accn == "" || !validActualSharesOutstandingFact(candidate) {
-			continue
-		}
-		current, exists := byAccession[candidate.Accn]
-		if !exists || candidate.End > current.End || (candidate.End == current.End && candidate.Filed > current.Filed) {
-			byAccession[candidate.Accn] = candidate
+func actualSharesOutstandingByAccession(response companyFacts) map[string]actualSharesFact {
+	byAccession := make(map[string]actualSharesFact)
+	for _, sourced := range actualSharesConcepts(response) {
+		for _, candidate := range sourced.concept.Units["shares"] {
+			if candidate.Accn == "" || !validActualSharesOutstandingFact(candidate) {
+				continue
+			}
+			current, exists := byAccession[candidate.Accn]
+			// Concepts are ordered by authority, so a DEI observation is never
+			// displaced by the us-gaap fallback for the same filing.
+			if exists && current.Source != sourced.source {
+				continue
+			}
+			if !exists || candidate.End > current.End || (candidate.End == current.End && candidate.Filed > current.Filed) {
+				byAccession[candidate.Accn] = actualSharesFact{fact: candidate, Source: sourced.source}
+			}
 		}
 	}
 	return byAccession
@@ -484,6 +520,7 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		if value, ok := actualShares[anchor.Accn]; ok {
 			row.SharesOutstandingB = floatPtr(value.Val / 1e9)
 			row.SharesOutstandingAsOf = value.End
+			row.SharesOutstandingSource = value.Source
 		}
 		if value, ok := cash[anchor.End]; ok {
 			row.CashB = floatPtr(value.Val / 1e9)

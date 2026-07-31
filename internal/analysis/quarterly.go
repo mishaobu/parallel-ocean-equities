@@ -134,6 +134,7 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 		if value, ok := actualShares[anchor.accession]; ok {
 			row.SharesOutstandingB = floatPtr(value.Val / 1e9)
 			row.SharesOutstandingAsOf = value.End
+			row.SharesOutstandingSource = value.Source
 		}
 		row.CashB = quarterBillions(cash[periodEnd])
 		row.InvestmentsB = quarterBillions(investments[periodEnd])

@@ -17,6 +17,7 @@ export function TickerRail({ equities, selected, onSelect }: Props) {
             key={equity.ticker}
             type="button"
             className={`ticker-button ${selected === equity.ticker ? "is-selected" : ""}`}
+					aria-current={selected === equity.ticker ? "true" : undefined}
             onClick={() => onSelect(equity.ticker)}
           >
             <span><b>{equity.ticker}</b><small>{equity.company || "Pending analysis"}</small></span>

@@ -19,16 +19,16 @@ import (
 
 func TestYahooMarketDecodesMonthlyClosesAtMonthEnd(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("interval") != "1mo" || r.Header.Get("User-Agent") != "parallel-ocean-equities/1.0" {
+		if r.URL.Query().Get("interval") != "1mo" || r.URL.Query().Get("events") != "history,splits" || r.Header.Get("User-Agent") != "parallel-ocean-equities/1.0" {
 			t.Fatalf("unexpected request: %s user-agent=%s", r.URL.String(), r.Header.Get("User-Agent"))
 		}
-		fmt.Fprint(w, `{"chart":{"result":[{"timestamp":[1704067200,1706745600,1709251200],"indicators":{"quote":[{"close":[100,null,120]}],"adjclose":[{"adjclose":[90,null,115]}]}}],"error":null}}`)
+		fmt.Fprint(w, `{"chart":{"result":[{"timestamp":[1704067200,1706745600,1709251200],"events":{"splits":{"split":{"date":1707955200,"numerator":10,"denominator":1,"splitRatio":"10:1"}}},"indicators":{"quote":[{"close":[100,null,120]}],"adjclose":[{"adjclose":[90,null,115]}]}}],"error":null}}`)
 	}))
 	defer server.Close()
 	provider := NewYahooMarket(server.Client())
 	provider.baseURL = server.URL
 	end := time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC)
-	prices, source, err := provider.History(context.Background(), "AMZN", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), end)
+	prices, source, basis, err := provider.HistoryWithPriceBasis(context.Background(), "AMZN", time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC), end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,36 @@ func TestYahooMarketDecodesMonthlyClosesAtMonthEnd(t *testing.T) {
 	}
 	if prices[0].TotalReturnClose == nil || *prices[0].TotalReturnClose != 90 || prices[1].TotalReturnClose == nil || *prices[1].TotalReturnClose != 115 {
 		t.Fatalf("adjusted closes missing: %v", prices)
+	}
+	if basis == nil || basis.Provider != "yahoo-finance" || basis.Adjustment != "split-adjusted" || !basis.SplitCoverageComplete || basis.SplitCoverageStart != "2024-01-01" || basis.SplitCoverageEnd != "2024-03-01" || len(basis.StockSplits) != 1 || basis.StockSplits[0].Date != "2024-02-15" || basis.StockSplits[0].Ratio != 10 {
+		t.Fatalf("historical price basis is not bound to the response: %+v", basis)
+	}
+}
+
+func TestYahooHistoricalPriceBasisValidatesEventsAndRetainsReverseSplits(t *testing.T) {
+	start := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, time.January, 31, 0, 0, 0, 0, time.UTC)
+	timestamps := []int64{start.Unix(), end.Unix()}
+	reverse := map[string]yahooSplitEvent{
+		"reverse": {Date: time.Date(2025, time.June, 2, 13, 30, 0, 0, time.UTC).Unix(), Numerator: 1, Denominator: 10},
+	}
+	basis := yahooHistoricalPriceBasis(timestamps, reverse, "Yahoo Finance monthly close and adjusted close")
+	if basis == nil || len(basis.StockSplits) != 1 || basis.StockSplits[0].Date != "2025-06-02" || basis.StockSplits[0].Ratio != 0.1 {
+		t.Fatalf("valid reverse split was not retained: %+v", basis)
+	}
+
+	conflicting := map[string]yahooSplitEvent{
+		"one": {Date: time.Date(2025, time.June, 2, 13, 30, 0, 0, time.UTC).Unix(), Numerator: 2, Denominator: 1},
+		"two": {Date: time.Date(2025, time.June, 2, 16, 0, 0, 0, time.UTC).Unix(), Numerator: 3, Denominator: 1},
+	}
+	if got := yahooHistoricalPriceBasis(timestamps, conflicting, "Yahoo Finance monthly close and adjusted close"); got != nil {
+		t.Fatalf("conflicting same-day splits produced a trusted basis: %+v", got)
+	}
+	future := map[string]yahooSplitEvent{
+		"future": {Date: end.AddDate(0, 0, 1).Unix(), Numerator: 2, Denominator: 1},
+	}
+	if got := yahooHistoricalPriceBasis(timestamps, future, "Yahoo Finance monthly close and adjusted close"); got != nil {
+		t.Fatalf("post-coverage split produced a trusted basis: %+v", got)
 	}
 }
 
@@ -392,7 +422,11 @@ func TestYahooMonthlyStatisticSnapshotsArePointInTimeAndMonthly(t *testing.T) {
 		"split": {Date: time.Date(2020, time.August, 31, 16, 0, 0, 0, time.UTC).Unix(), Numerator: 4, Denominator: 1, SplitRatio: "4:1"},
 	}
 
-	snapshots := yahooMonthlyStatisticSnapshots(result, rows, "REGULAR", asOf)
+	stockSplits, complete := yahooStockSplitEvents(result, result, asOf)
+	if !complete {
+		t.Fatal("test split history was not valid")
+	}
+	snapshots := yahooMonthlyStatisticSnapshots(result, rows, "REGULAR", asOf, stockSplits)
 	completed := completedDailyObservations(rows, "REGULAR", asOf)
 	expectedByMonth := make(map[string]quoteObservation)
 	for _, row := range completed {
@@ -476,8 +510,12 @@ func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
 	}}
 	pipeline := &Pipeline{Market: market}
 	equity := &model.Equity{
-		Annuals:   []model.AnnualPoint{{PeriodEnd: "2026-06-30", DilutedSharesB: floatPtr(15)}},
-		Current:   model.CurrentMetrics{SharesOutstandingB: floatPtr(1.5), SharesOutstandingAsOf: "2026-06-27"},
+		Annuals: []model.AnnualPoint{{PeriodEnd: "2026-06-30", DilutedSharesB: floatPtr(15)}},
+		Current: model.CurrentMetrics{
+			SharesOutstandingB:      floatPtr(1.5),
+			SharesOutstandingAsOf:   "2026-06-27",
+			SharesOutstandingSource: usGAAPActualSharesSource,
+		},
 		Valuation: model.ValuationMetrics{NetDebtB: floatPtr(50)},
 	}
 	quote, err := pipeline.Quote(context.Background(), "aapl", equity)
@@ -490,7 +528,7 @@ func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
 	if quote.ShareBasisAsOf != "2026-06-27" {
 		t.Fatalf("unexpected share basis: %+v", quote)
 	}
-	if strings.Count(quote.Source, exactSharesAggregateSource) != 1 || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "split-adjusted x10") {
+	if strings.Count(quote.Source, exactSharesAggregateSource) != 1 || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "us-gaap:CommonStockSharesOutstanding") || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "split-adjusted x10") {
 		t.Fatalf("split provenance is not exact/idempotent: %+v", quote)
 	}
 	quote = rebaseQuoteToEquity(quote, equity)
@@ -547,13 +585,42 @@ func TestYahooStockSplitEventsValidateAndMergeCurrentHistory(t *testing.T) {
 	}
 }
 
+func TestYahooStockSplitEventsDeduplicateSameRatioNearDates(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 17, 0, 0, 0, time.UTC)
+	history := yahooQuoteResult{}
+	history.Events.Splits = map[string]yahooSplitEvent{
+		"canonical": {Date: time.Date(2018, time.May, 4, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 50, Denominator: 1},
+	}
+	current := yahooQuoteResult{}
+	current.Events.Splits = map[string]yahooSplitEvent{
+		"duplicate":        {Date: time.Date(2018, time.May, 16, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 100, Denominator: 2},
+		"different-ratio":  {Date: time.Date(2018, time.May, 17, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 2, Denominator: 1},
+		"later-real-event": {Date: time.Date(2018, time.June, 1, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 50, Denominator: 1},
+	}
+	events, ok := yahooStockSplitEvents(current, history, asOf)
+	if !ok {
+		t.Fatal("valid split events were rejected")
+	}
+	if len(events) != 3 || events[0].Date != "2018-05-04" || events[0].Ratio != 50 || events[1].Date != "2018-05-17" || events[1].Ratio != 2 || events[2].Date != "2018-06-01" || events[2].Ratio != 50 {
+		t.Fatalf("near-date split canonicalization = %#v", events)
+	}
+	factor, date := latestValidatedStockSplit(events, time.Date(2018, time.May, 20, 0, 0, 0, 0, time.UTC))
+	if factor != "2:1" || date != "2018-05-17" {
+		t.Fatalf("latest canonical split = %s on %s", factor, date)
+	}
+}
+
 func TestYahooBetaBenchmarkCacheDegradationIsObservable(t *testing.T) {
 	now := time.Date(2026, time.July, 31, 17, 0, 0, 0, time.UTC)
 	target := yahooHistoryMetadata{cacheStatus: "fresh", cachedAt: now}
-	benchmark := yahooHistoryMetadata{cacheStatus: "stale", cachedAt: now.Add(-48 * time.Hour), refreshFailureKind: "throttled", refreshFailed: true}
-	merged := mergeYahooHistoryMetadata(target, benchmark)
-	if merged.cacheStatus != "stale" || !merged.cachedAt.Equal(benchmark.cachedAt) || merged.refreshFailureKind != "throttled" || !merged.refreshFailed {
-		t.Fatalf("benchmark cache degradation was hidden: %+v", merged)
+	benchmark := yahooHistoryMetadata{cacheStatus: "stale", cachedAt: now.Add(-48 * time.Hour), refreshFailureKind: "throttled", refreshFailed: true, refreshFailureID: "spy-refresh-1"}
+	quote := model.LiveQuote{}
+	applyYahooHistoryMetadata(&quote, target, benchmark)
+	if quote.HistoryCacheStatus != "fresh" || quote.HistoryCacheAsOf != now.Format(time.RFC3339) || quote.HistoryRefreshFailed {
+		t.Fatalf("benchmark degradation contaminated target history: %+v", quote)
+	}
+	if quote.BenchmarkHistoryCacheStatus != "stale" || quote.BenchmarkHistoryCacheAsOf != benchmark.cachedAt.Format(time.RFC3339) || quote.BenchmarkHistoryRefreshFailureKind != "throttled" || !quote.BenchmarkHistoryRefreshFailed || quote.BenchmarkHistoryRefreshFailureID != benchmark.refreshFailureID {
+		t.Fatalf("benchmark cache degradation was hidden: %+v", quote)
 	}
 }
 
@@ -583,23 +650,70 @@ func TestAlignedMonthlyBetaUsesFiveYearsOfAdjustedReturns(t *testing.T) {
 	}
 }
 
+func TestRollingAlignedMonthlyBetasPopulateRecordedHistory(t *testing.T) {
+	target := make(map[string]float64)
+	benchmark := make(map[string]float64)
+	date := time.Date(2019, time.January, 1, 0, 0, 0, 0, time.UTC)
+	targetPrice, benchmarkPrice := 100.0, 100.0
+	for index := 0; index <= 72; index++ {
+		month := date.AddDate(0, index, 0).Format("2006-01")
+		if index > 0 {
+			marketReturn := 0.01
+			if index%3 == 0 {
+				marketReturn = -0.006
+			}
+			benchmarkPrice *= 1 + marketReturn
+			targetPrice *= 1 + 2*marketReturn
+		}
+		target[month] = targetPrice
+		benchmark[month] = benchmarkPrice
+	}
+	values := rollingAlignedMonthlyBetas(target, benchmark)
+	if len(values) != 13 {
+		t.Fatalf("rolling beta points = %d, want 13: %#v", len(values), values)
+	}
+	for month, value := range values {
+		if math.Abs(value-2) > 1e-12 {
+			t.Fatalf("rolling beta for %s = %v, want 2", month, value)
+		}
+	}
+	history := []model.StatisticSnapshot{
+		{AsOf: "2023-12-29T21:00:00Z"},
+		{AsOf: "2024-01-31T21:00:00Z", Numeric: map[string]float64{"price": 100}, Sources: map[string]string{"price": yahooDailyCloseSource}},
+		{AsOf: "2025-01-31T21:00:00Z"},
+	}
+	addRollingBetaHistory(history, values)
+	if _, ok := history[0].Numeric["beta-5y"]; ok {
+		t.Fatalf("pre-window snapshot received beta: %+v", history[0])
+	}
+	if math.Abs(history[1].Numeric["beta-5y"]-2) > 1e-12 || history[1].Sources["beta-5y"] != betaCalculationSource || history[1].Numeric["price"] != 100 {
+		t.Fatalf("beta history was not merged with provenance: %+v", history[1])
+	}
+	if math.Abs(history[2].Numeric["beta-5y"]-2) > 1e-12 || history[2].Sources["beta-5y"] != betaCalculationSource {
+		t.Fatalf("beta history did not initialize maps: %+v", history[2])
+	}
+}
+
 func TestCompositeMarketPrefersFirstProviderWithDecadeCoverage(t *testing.T) {
 	short := &fakeMarketProvider{rows: []model.PricePoint{{Date: "2024-01-01", Close: 1}, {Date: "2026-01-01", Close: 2}}, source: "short"}
-	long := &fakeMarketProvider{rows: []model.PricePoint{{Date: "2012-01-01", Close: 1}, {Date: "2026-01-01", Close: 2}}, source: "long"}
+	wantBasis := &model.HistoricalPriceBasis{Adjustment: "split-adjusted", SplitCoverageComplete: true}
+	long := &fakeMarketProvider{rows: []model.PricePoint{{Date: "2012-01-01", Close: 1}, {Date: "2026-01-01", Close: 2}}, source: "long", basis: wantBasis}
 	unused := &fakeMarketProvider{err: fmt.Errorf("should not be called")}
-	rows, source, err := NewCompositeMarket(short, long, unused).History(context.Background(), "AMZN", time.Time{}, time.Now())
+	rows, source, basis, err := NewCompositeMarket(short, long, unused).HistoryWithPriceBasis(context.Background(), "AMZN", time.Time{}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "long" || len(rows) != 2 || unused.called {
-		t.Fatalf("source=%q rows=%v unused.called=%v", source, rows, unused.called)
+	if source != "long" || len(rows) != 2 || basis != wantBasis || unused.called {
+		t.Fatalf("source=%q rows=%v basis=%+v unused.called=%v", source, rows, basis, unused.called)
 	}
 }
 
 func TestPipelineBuildsMarketOnlyInstrumentWithoutSEC(t *testing.T) {
+	basis := &model.HistoricalPriceBasis{Provider: "yahoo-finance", Adjustment: "split-adjusted", SplitCoverageComplete: true}
 	market := &fakeMarketProvider{
 		rows:   []model.PricePoint{{Date: "2000-01-31", Close: 10}, {Date: "2026-01-31", Close: 50}},
 		source: "fixture",
+		basis:  basis,
 	}
 	result, err := (&Pipeline{Market: market}).Analyze(context.Background(), "005930.KS", nil)
 	if err != nil {
@@ -608,7 +722,7 @@ func TestPipelineBuildsMarketOnlyInstrumentWithoutSEC(t *testing.T) {
 	if result.Company != "Samsung Electronics Co., Ltd." || result.InstrumentType != "International equity" {
 		t.Fatalf("unexpected profile: %+v", result)
 	}
-	if result.Status != "ready" || len(result.Prices) != 2 || result.Current.Price == nil {
+	if result.Status != "ready" || len(result.Prices) != 2 || result.Current.Price == nil || result.HistoricalPriceBasis != basis {
 		t.Fatalf("unexpected market result: %+v", result)
 	}
 }
@@ -627,11 +741,17 @@ type fakeMarketProvider struct {
 	called   bool
 	quote    model.LiveQuote
 	quoteErr error
+	basis    *model.HistoricalPriceBasis
 }
 
 func (f *fakeMarketProvider) History(context.Context, string, time.Time, time.Time) ([]model.PricePoint, string, error) {
 	f.called = true
 	return f.rows, f.source, f.err
+}
+
+func (f *fakeMarketProvider) HistoryWithPriceBasis(context.Context, string, time.Time, time.Time) ([]model.PricePoint, string, *model.HistoricalPriceBasis, error) {
+	f.called = true
+	return f.rows, f.source, f.basis, f.err
 }
 
 func (f *fakeMarketProvider) Quote(context.Context, string) (model.LiveQuote, error) {

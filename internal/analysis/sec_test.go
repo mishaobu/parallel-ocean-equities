@@ -85,6 +85,70 @@ func TestSECAnalyzePopulatesOnlyExactSharesOutstanding(t *testing.T) {
 		if result.Current.SharesOutstandingAsOf != "2025-04-10" {
 			t.Fatalf("unexpected shares-outstanding as-of date: %q", result.Current.SharesOutstandingAsOf)
 		}
+		if result.Current.SharesOutstandingSource != deiActualSharesSource {
+			t.Fatalf("unexpected shares-outstanding source: %q", result.Current.SharesOutstandingSource)
+		}
+	})
+
+	t.Run("exact non-dimensional us-gaap instant fallback", func(t *testing.T) {
+		facts := cloneFactNamespaces(baseFacts)
+		facts["us-gaap"] = cloneFactConcepts(facts["us-gaap"])
+		facts["us-gaap"]["CommonStockSharesOutstanding"] = factConcept{Units: map[string][]fact{"shares": {
+			{End: "2025-03-31", Val: 1.25e9, Accn: "0000000001-25-000002", Form: "10-Q", Filed: "2025-04-20", Frame: "CY2025Q1I"},
+		}}}
+		result := analyze(t, facts)
+		assertFloat(t, "us-gaap actual shares outstanding", result.Current.SharesOutstandingB, 1.25)
+		if result.Current.SharesOutstandingAsOf != "2025-03-31" || result.Current.SharesOutstandingSource != usGAAPActualSharesSource {
+			t.Fatalf("unexpected us-gaap share provenance: %#v", result.Current)
+		}
+	})
+
+	t.Run("DEI remains authoritative", func(t *testing.T) {
+		facts := cloneFactNamespaces(baseFacts)
+		facts["us-gaap"] = cloneFactConcepts(facts["us-gaap"])
+		facts["us-gaap"]["CommonStockSharesOutstanding"] = factConcept{Units: map[string][]fact{"shares": {
+			{End: "2025-03-31", Val: 1.25e9, Form: "10-Q", Filed: "2025-04-20"},
+		}}}
+		facts["dei"] = map[string]factConcept{
+			"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": {
+				{End: "2025-03-31", Val: 1.2e9, Form: "10-Q", Filed: "2025-04-20"},
+			}}},
+		}
+		result := analyze(t, facts)
+		assertFloat(t, "authoritative DEI shares outstanding", result.Current.SharesOutstandingB, 1.2)
+		if result.Current.SharesOutstandingSource != deiActualSharesSource {
+			t.Fatalf("us-gaap fallback displaced DEI: %#v", result.Current)
+		}
+	})
+
+	t.Run("newer us-gaap instant supersedes stale DEI", func(t *testing.T) {
+		facts := cloneFactNamespaces(baseFacts)
+		facts["us-gaap"] = cloneFactConcepts(facts["us-gaap"])
+		facts["us-gaap"]["CommonStockSharesOutstanding"] = factConcept{Units: map[string][]fact{"shares": {
+			{End: "2025-03-31", Val: 1.25e9, Form: "10-Q", Filed: "2025-04-20"},
+		}}}
+		facts["dei"] = map[string]factConcept{
+			"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": {
+				{End: "2024-12-31", Val: 1.3e9, Form: "10-K", Filed: "2025-02-01"},
+			}}},
+		}
+		result := analyze(t, facts)
+		assertFloat(t, "fresh us-gaap shares outstanding", result.Current.SharesOutstandingB, 1.25)
+		if result.Current.SharesOutstandingSource != usGAAPActualSharesSource {
+			t.Fatalf("stale DEI displaced newer us-gaap instant: %#v", result.Current)
+		}
+	})
+
+	t.Run("implausible us-gaap fallback is rejected", func(t *testing.T) {
+		facts := cloneFactNamespaces(baseFacts)
+		facts["us-gaap"] = cloneFactConcepts(facts["us-gaap"])
+		facts["us-gaap"]["CommonStockSharesOutstanding"] = factConcept{Units: map[string][]fact{"shares": {
+			{End: "2025-03-31", Val: 9e9, Form: "10-Q", Filed: "2025-04-20"},
+		}}}
+		result := analyze(t, facts)
+		if result.Current.SharesOutstandingB != nil || result.Current.SharesOutstandingAsOf != "" || result.Current.SharesOutstandingSource != "" {
+			t.Fatalf("implausible us-gaap share fallback survived: %#v", result.Current)
+		}
 	})
 
 	t.Run("no diluted-share fallback", func(t *testing.T) {
@@ -158,6 +222,7 @@ func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *te
 	tests := []struct {
 		name        string
 		deiFacts    []fact
+		usGAAPFacts []fact
 		customFacts []fact
 		wantAnnual  *float64
 		wantQuarter *float64
@@ -179,11 +244,20 @@ func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *te
 			name:        "missing DEI fact",
 			customFacts: matchingFacts,
 		},
+		{
+			name:        "exact us-gaap fallback by accession",
+			usGAAPFacts: matchingFacts,
+			wantAnnual:  floatPtr(1.25),
+			wantQuarter: floatPtr(1.35),
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			facts := map[string]map[string]factConcept{"us-gaap": gaap}
+			facts := map[string]map[string]factConcept{"us-gaap": cloneFactConcepts(gaap)}
+			if test.usGAAPFacts != nil {
+				facts["us-gaap"]["CommonStockSharesOutstanding"] = factConcept{Units: map[string][]fact{"shares": test.usGAAPFacts}}
+			}
 			if test.deiFacts != nil {
 				facts["dei"] = map[string]factConcept{
 					"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": test.deiFacts}},
@@ -219,6 +293,13 @@ func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *te
 				if annuals[0].SharesOutstandingAsOf != "2025-02-10" {
 					t.Fatalf("unexpected annual actual-share date: %q", annuals[0].SharesOutstandingAsOf)
 				}
+				wantSource := deiActualSharesSource
+				if test.usGAAPFacts != nil {
+					wantSource = usGAAPActualSharesSource
+				}
+				if annuals[0].SharesOutstandingSource != wantSource {
+					t.Fatalf("unexpected annual actual-share source: %q", annuals[0].SharesOutstandingSource)
+				}
 			}
 			if test.wantQuarter == nil {
 				if quarters[0].SharesOutstandingB != nil || quarters[0].SharesOutstandingAsOf != "" {
@@ -229,6 +310,13 @@ func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *te
 				if quarters[0].SharesOutstandingAsOf != "2024-04-10" {
 					t.Fatalf("unexpected quarterly actual-share date: %q", quarters[0].SharesOutstandingAsOf)
 				}
+				wantSource := deiActualSharesSource
+				if test.usGAAPFacts != nil {
+					wantSource = usGAAPActualSharesSource
+				}
+				if quarters[0].SharesOutstandingSource != wantSource {
+					t.Fatalf("unexpected quarterly actual-share source: %q", quarters[0].SharesOutstandingSource)
+				}
 			}
 		})
 	}
@@ -238,6 +326,14 @@ func cloneFactNamespaces(source map[string]map[string]factConcept) map[string]ma
 	clone := make(map[string]map[string]factConcept, len(source))
 	for namespace, concepts := range source {
 		clone[namespace] = concepts
+	}
+	return clone
+}
+
+func cloneFactConcepts(source map[string]factConcept) map[string]factConcept {
+	clone := make(map[string]factConcept, len(source))
+	for concept, facts := range source {
+		clone[concept] = facts
 	}
 	return clone
 }

@@ -28,6 +28,8 @@ const (
 	yahooHistoryRetryBackoff = 30 * time.Minute
 	yahooHistoryCacheLimit   = 256
 	yahooHistoryConcurrency  = 4
+	betaCalculationSource    = "Parallel Ocean calculation: covariance with SPY / SPY variance over 60 aligned completed monthly adjusted returns"
+	betaBenchmarkSource      = "SPY adjusted closes from Yahoo Finance chart API"
 )
 
 var ErrNoQuoteProvider = errors.New("no live-quote provider configured")
@@ -85,7 +87,12 @@ func rebaseQuoteToEquity(quote model.LiveQuote, existing *model.Equity) model.Li
 	}
 	quote.SharesOutstandingB = liveFloat(shares)
 	quote.ShareBasisAsOf = existing.Current.SharesOutstandingAsOf
-	shareSource := "SEC CompanyFacts dei:EntityCommonStockSharesOutstanding instant fact"
+	shareSource := strings.TrimSpace(existing.Current.SharesOutstandingSource)
+	if shareSource == "" {
+		// Persisted states created before source-level share provenance was added
+		// can only contain the legacy DEI-derived value.
+		shareSource = deiActualSharesSource
+	}
 	if math.Abs(splitFactor-1) > 1e-12 {
 		shareSource += fmt.Sprintf("; Yahoo split-adjusted x%g to current price basis", splitFactor)
 	}
@@ -295,6 +302,7 @@ type yahooHistoryMetadata struct {
 	cachedAt           time.Time
 	refreshFailureKind string
 	refreshFailed      bool
+	refreshFailureID   string
 }
 
 // The process-wide cache is keyed by provider identity so test/custom Yahoo
@@ -361,20 +369,32 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	}
 	quote.StockSplitCoverageComplete = quote.StockSplitCoverageComplete && historyMetadata.cacheStatus == "fresh"
 	var benchmarkMetadata yahooHistoryMetadata
-	quote.Beta5YMonthly, benchmarkMetadata = y.beta5YMonthly(ctx, ticker, history)
-	historyMetadata = mergeYahooHistoryMetadata(historyMetadata, benchmarkMetadata)
-	quote.HistoryCacheStatus = historyMetadata.cacheStatus
-	if !historyMetadata.cachedAt.IsZero() {
-		quote.HistoryCacheAsOf = historyMetadata.cachedAt.UTC().Format(time.RFC3339)
-	}
-	quote.HistoryRefreshFailureKind = historyMetadata.refreshFailureKind
-	quote.HistoryRefreshFailed = historyMetadata.refreshFailed
+	var betaHistory map[string]float64
+	quote.Beta5YMonthly, betaHistory, benchmarkMetadata = y.beta5YMonthly(ctx, ticker, history)
+	addRollingBetaHistory(quote.History, betaHistory)
+	applyYahooHistoryMetadata(&quote, historyMetadata, benchmarkMetadata)
 	if quote.Beta5YMonthly != nil {
 		quote.BetaBenchmark = "SPY adjusted total return"
-		setQuoteFieldSource(&quote, "beta5YMonthly", "Parallel Ocean calculation: covariance with SPY / SPY variance over 60 aligned completed monthly adjusted returns")
-		setQuoteFieldSource(&quote, "betaBenchmark", "SPY adjusted closes from Yahoo Finance chart API")
+		setQuoteFieldSource(&quote, "beta5YMonthly", betaCalculationSource)
+		setQuoteFieldSource(&quote, "betaBenchmark", betaBenchmarkSource)
 	}
 	return quote, nil
+}
+
+func applyYahooHistoryMetadata(quote *model.LiveQuote, target, benchmark yahooHistoryMetadata) {
+	quote.HistoryCacheStatus = target.cacheStatus
+	if !target.cachedAt.IsZero() {
+		quote.HistoryCacheAsOf = target.cachedAt.UTC().Format(time.RFC3339)
+	}
+	quote.HistoryRefreshFailureKind = target.refreshFailureKind
+	quote.HistoryRefreshFailed = target.refreshFailed
+	quote.BenchmarkHistoryCacheStatus = benchmark.cacheStatus
+	if !benchmark.cachedAt.IsZero() {
+		quote.BenchmarkHistoryCacheAsOf = benchmark.cachedAt.UTC().Format(time.RFC3339)
+	}
+	quote.BenchmarkHistoryRefreshFailureKind = benchmark.refreshFailureKind
+	quote.BenchmarkHistoryRefreshFailed = benchmark.refreshFailed
+	quote.BenchmarkHistoryRefreshFailureID = benchmark.refreshFailureID
 }
 
 func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (yahooQuoteResult, yahooHistoryMetadata, error) {
@@ -413,7 +433,8 @@ func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (ya
 		case <-call.done:
 			return call.result, call.metadata, call.err
 		case <-ctx.Done():
-			return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true}, ctx.Err()
+			now := time.Now().UTC()
+			return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true, refreshFailureID: yahooHistoryFailureID(key, now)}, ctx.Err()
 		}
 	}
 	call := &yahooHistoryCall{done: make(chan struct{})}
@@ -425,7 +446,8 @@ func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (ya
 	case <-call.done:
 		return call.result, call.metadata, call.err
 	case <-ctx.Done():
-		return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true}, ctx.Err()
+		now := time.Now().UTC()
+		return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true, refreshFailureID: yahooHistoryFailureID(key, now)}, ctx.Err()
 	}
 }
 
@@ -464,6 +486,7 @@ func (y *YahooMarket) loadQuoteHistory(key yahooHistoryCacheKey, call *yahooHist
 	if fetchErr != nil {
 		metadata.refreshFailureKind = classifyQuoteFailure(fetchErr)
 		metadata.refreshFailed = true
+		metadata.refreshFailureID = yahooHistoryFailureID(key, now)
 	}
 	yahooHistoryCache.Lock()
 	if fetchErr == nil {
@@ -497,6 +520,10 @@ func (y *YahooMarket) loadQuoteHistory(key yahooHistoryCacheKey, call *yahooHist
 	delete(yahooHistoryCache.calls, key)
 	close(call.done)
 	yahooHistoryCache.Unlock()
+}
+
+func yahooHistoryFailureID(key yahooHistoryCacheKey, observedAt time.Time) string {
+	return fmt.Sprintf("%p/%s/%d", key.provider, key.ticker, observedAt.UnixNano())
 }
 
 func pruneYahooHistoryCacheLocked(incoming yahooHistoryCacheKey) {
@@ -688,7 +715,7 @@ func buildYahooLiveQuoteWithHistory(ticker string, current, history yahooQuoteRe
 		setQuoteFieldSource(&quote, "lastSplitFactor", "Yahoo Finance latest chart split event")
 		setQuoteFieldSource(&quote, "lastSplitDate", "Yahoo Finance latest chart split event date")
 	}
-	quote.History = yahooMonthlyStatisticSnapshots(history, observations, quote.MarketState, asOf)
+	quote.History = yahooMonthlyStatisticSnapshots(history, observations, quote.MarketState, asOf, quote.StockSplits)
 	return quote, nil
 }
 
@@ -777,7 +804,7 @@ func completedDailyObservations(rows []quoteObservation, marketState string, asO
 // completed daily session represented in each calendar month. It intentionally
 // contains no SEC share basis, market cap, or enterprise value: those belong to
 // the separately persisted current quote after Pipeline enrichment.
-func yahooMonthlyStatisticSnapshots(result yahooQuoteResult, observations []quoteObservation, marketState string, asOf time.Time) []model.StatisticSnapshot {
+func yahooMonthlyStatisticSnapshots(result yahooQuoteResult, observations []quoteObservation, marketState string, asOf time.Time, stockSplits []model.StockSplitEvent) []model.StatisticSnapshot {
 	completed := completedDailyObservations(observations, marketState, asOf)
 	if len(completed) == 0 {
 		return nil
@@ -861,7 +888,7 @@ func yahooMonthlyStatisticSnapshots(result yahooQuoteResult, observations []quot
 			addNumeric("average-dividend-yield-5y", fiveYearAverageDividendYield(dividends, throughSession, row.date), "Parallel Ocean mean of five completed calendar-year Yahoo dividend-event sums / year-end daily closes")
 		}
 
-		factor, splitDate := yahooLatestSplit(result, row.date)
+		factor, splitDate := latestValidatedStockSplit(stockSplits, row.date)
 		addText("last-split-factor", factor, "Yahoo Finance latest chart split event through snapshot session")
 		addText("last-split-date", splitDate, "Yahoo Finance latest chart split event date through snapshot session")
 		if len(snapshot.Text) == 0 {
@@ -882,54 +909,44 @@ func sameUTCDate(left, right time.Time) bool {
 	return left.Year() == right.Year() && left.Month() == right.Month() && left.Day() == right.Day()
 }
 
-func (y *YahooMarket) beta5YMonthly(ctx context.Context, ticker string, target yahooQuoteResult) (*float64, yahooHistoryMetadata) {
+func (y *YahooMarket) beta5YMonthly(ctx context.Context, ticker string, target yahooQuoteResult) (*float64, map[string]float64, yahooHistoryMetadata) {
 	asOf := time.Now().UTC()
 	if target.Meta.RegularMarketTime > 0 {
 		asOf = time.Unix(target.Meta.RegularMarketTime, 0).UTC()
 	}
 	targetMonths := monthlyAdjustedCloses(yahooQuoteObservations(target), asOf)
 	if longestRecentMonthlyRun(targetMonths) < 61 {
-		return nil, yahooHistoryMetadata{}
+		return nil, nil, yahooHistoryMetadata{}
 	}
 	if strings.EqualFold(ticker, "SPY") {
-		return liveFloat(1), yahooHistoryMetadata{}
+		return liveFloat(1), rollingAlignedMonthlyBetas(targetMonths, targetMonths), yahooHistoryMetadata{}
 	}
 	benchmark, metadata, err := y.cachedQuoteHistory(ctx, "SPY")
 	if err != nil {
-		return nil, metadata
+		return nil, nil, metadata
 	}
 	benchmarkMonths := monthlyAdjustedCloses(yahooQuoteObservations(benchmark), asOf)
-	return alignedMonthlyBeta(targetMonths, benchmarkMonths), metadata
+	return alignedMonthlyBeta(targetMonths, benchmarkMonths), rollingAlignedMonthlyBetas(targetMonths, benchmarkMonths), metadata
 }
 
-func mergeYahooHistoryMetadata(primary, benchmark yahooHistoryMetadata) yahooHistoryMetadata {
-	if yahooHistoryStatusRank(benchmark.cacheStatus) == 0 {
-		return primary
-	}
-	merged := primary
-	if yahooHistoryStatusRank(benchmark.cacheStatus) > yahooHistoryStatusRank(primary.cacheStatus) {
-		merged.cacheStatus = benchmark.cacheStatus
-	}
-	if !benchmark.cachedAt.IsZero() && (merged.cachedAt.IsZero() || benchmark.cachedAt.Before(merged.cachedAt)) {
-		merged.cachedAt = benchmark.cachedAt
-	}
-	if benchmark.refreshFailureKind != "" && (merged.refreshFailureKind == "" || yahooHistoryStatusRank(benchmark.cacheStatus) >= yahooHistoryStatusRank(primary.cacheStatus)) {
-		merged.refreshFailureKind = benchmark.refreshFailureKind
-	}
-	merged.refreshFailed = merged.refreshFailed || benchmark.refreshFailed
-	return merged
-}
-
-func yahooHistoryStatusRank(status string) int {
-	switch status {
-	case "fresh":
-		return 1
-	case "stale":
-		return 2
-	case "unavailable":
-		return 3
-	default:
-		return 0
+func addRollingBetaHistory(history []model.StatisticSnapshot, values map[string]float64) {
+	for index := range history {
+		month := ""
+		if observed, err := time.Parse(time.RFC3339Nano, history[index].AsOf); err == nil {
+			month = observed.UTC().Format("2006-01")
+		}
+		value, ok := values[month]
+		if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		if history[index].Numeric == nil {
+			history[index].Numeric = make(map[string]float64)
+		}
+		if history[index].Sources == nil {
+			history[index].Sources = make(map[string]string)
+		}
+		history[index].Numeric["beta-5y"] = value
+		history[index].Sources["beta-5y"] = betaCalculationSource
 	}
 }
 
@@ -977,9 +994,44 @@ func alignedMonthlyBeta(target, benchmark map[string]float64) *float64 {
 			return nil
 		}
 	}
+	return alignedMonthlyBetaForKeys(target, benchmark, keys[start:])
+}
+
+func rollingAlignedMonthlyBetas(target, benchmark map[string]float64) map[string]float64 {
+	common := make(map[string]float64)
+	for month, value := range target {
+		if _, ok := benchmark[month]; ok {
+			common[month] = value
+		}
+	}
+	keys := sortedMonthKeys(common)
+	values := make(map[string]float64)
+	for end := 60; end < len(keys); end++ {
+		window := keys[end-60 : end+1]
+		contiguous := true
+		for index := 1; index < len(window); index++ {
+			if monthNumber(window[index])-monthNumber(window[index-1]) != 1 {
+				contiguous = false
+				break
+			}
+		}
+		if !contiguous {
+			continue
+		}
+		if beta := alignedMonthlyBetaForKeys(target, benchmark, window); beta != nil {
+			values[keys[end]] = *beta
+		}
+	}
+	return values
+}
+
+func alignedMonthlyBetaForKeys(target, benchmark map[string]float64, keys []string) *float64 {
+	if len(keys) != 61 {
+		return nil
+	}
 	targetReturns := make([]float64, 0, 60)
 	benchmarkReturns := make([]float64, 0, 60)
-	for index := start + 1; index < len(keys); index++ {
+	for index := 1; index < len(keys); index++ {
 		previous, current := keys[index-1], keys[index]
 		if target[previous] <= 0 || target[current] <= 0 || benchmark[previous] <= 0 || benchmark[current] <= 0 {
 			return nil
@@ -1257,7 +1309,39 @@ func yahooStockSplitEvents(current, history yahooQuoteResult, asOf time.Time) ([
 		events = append(events, event)
 	}
 	sort.Slice(events, func(i, j int) bool { return events[i].Date < events[j].Date })
-	return events, true
+	return deduplicateNearbyStockSplits(events), true
+}
+
+const yahooSplitDuplicateWindow = 14 * 24 * time.Hour
+
+func deduplicateNearbyStockSplits(events []model.StockSplitEvent) []model.StockSplitEvent {
+	canonical := make([]model.StockSplitEvent, 0, len(events))
+	for _, event := range events {
+		observed, err := time.Parse("2006-01-02", event.Date)
+		if err != nil {
+			// yahooStockSplitEvents validates every date before this helper. Keep
+			// fail-closed behavior if it is ever called independently.
+			return nil
+		}
+		duplicate := false
+		for index := len(canonical) - 1; index >= 0; index-- {
+			priorDate, err := time.Parse("2006-01-02", canonical[index].Date)
+			if err != nil {
+				return nil
+			}
+			if observed.Sub(priorDate) > yahooSplitDuplicateWindow {
+				break
+			}
+			if math.Abs(canonical[index].Ratio-event.Ratio) <= 1e-12 {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			canonical = append(canonical, event)
+		}
+	}
+	return canonical
 }
 
 func yahooSplitCoverageStart(history yahooQuoteResult) string {
@@ -1287,26 +1371,6 @@ func latestValidatedStockSplit(events []model.StockSplitEvent, asOf time.Time) (
 		return fmt.Sprintf("%g:%g", event.Numerator, event.Denominator), event.Date
 	}
 	return "", ""
-}
-
-func yahooLatestSplit(result yahooQuoteResult, asOf time.Time) (string, string) {
-	var latestDate time.Time
-	factor := ""
-	for _, event := range result.Events.Splits {
-		date := time.Unix(event.Date, 0).UTC()
-		if event.Date <= 0 || date.After(asOf) || !date.After(latestDate) {
-			continue
-		}
-		latestDate = date
-		factor = strings.TrimSpace(event.SplitRatio)
-		if factor == "" && event.Numerator > 0 && event.Denominator > 0 {
-			factor = fmt.Sprintf("%g:%g", event.Numerator, event.Denominator)
-		}
-	}
-	if latestDate.IsZero() {
-		return "", ""
-	}
-	return factor, latestDate.Format("2006-01-02")
 }
 
 func positiveLiveFloat(value *float64) *float64 {

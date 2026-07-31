@@ -148,7 +148,7 @@ func TestQuoteSnapshotSchedulerDefersForFundamentalsRefresh(t *testing.T) {
 	waitSnapshotDone(t, done)
 }
 
-func TestQuoteSnapshotSchedulerDefersForMacroRefresh(t *testing.T) {
+func TestQuoteSnapshotSchedulerDoesNotDeferForIndependentMacroRefresh(t *testing.T) {
 	clock := newSnapshotTestClock(time.Date(2026, 7, 31, 14, 0, 0, 0, time.UTC))
 	provider := newScriptedSnapshotProvider([]snapshotProviderResult{{
 		quote: model.LiveQuote{Ticker: "AAPL", MarketState: "REGULAR"},
@@ -164,10 +164,6 @@ func TestQuoteSnapshotSchedulerDefersForMacroRefresh(t *testing.T) {
 		close(done)
 	}()
 
-	waitSnapshotTimer(t, clock.created, config.BusyInterval)
-	assertNoSnapshotCall(t, provider.calls)
-	provider.setStats(Stats{})
-	clock.Advance(config.BusyInterval)
 	waitSnapshotCall(t, provider.calls, "AAPL")
 
 	cancel()

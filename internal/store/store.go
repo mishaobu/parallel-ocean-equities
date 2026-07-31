@@ -77,10 +77,7 @@ func (s *Store) load(path string) error {
 func (s *Store) Snapshot() model.State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, _ := json.Marshal(s.state)
-	var clone model.State
-	_ = json.Unmarshal(data, &clone)
-	return clone
+	return cloneState(s.state)
 }
 
 func (s *Store) Get(ticker string) (*model.Equity, error) {
@@ -106,8 +103,9 @@ func (s *Store) Add(ticker string) error {
 	if len(s.state.Tickers) >= s.maxTickers {
 		return ErrLimit
 	}
-	s.state.Tickers[ticker] = &model.Equity{Ticker: ticker, Status: "queued", Annuals: []model.AnnualPoint{}}
-	return s.saveLocked()
+	next := cloneState(s.state)
+	next.Tickers[ticker] = &model.Equity{Ticker: ticker, Status: "queued", Annuals: []model.AnnualPoint{}}
+	return s.commitLocked(next)
 }
 
 func (s *Store) Delete(ticker string) error {
@@ -120,8 +118,9 @@ func (s *Store) Delete(ticker string) error {
 	if len(s.state.Tickers) == 1 {
 		return errors.New("watchlist must contain at least one ticker")
 	}
-	delete(s.state.Tickers, ticker)
-	return s.saveLocked()
+	next := cloneState(s.state)
+	delete(next.Tickers, ticker)
+	return s.commitLocked(next)
 }
 
 func (s *Store) SetRefreshing(ticker string) error {
@@ -146,6 +145,9 @@ func (s *Store) SetResult(ticker string, result *model.Equity) error {
 const (
 	quoteHistoryYears = 10
 	quoteHistoryLimit = 4000
+	// Exchange timestamps slightly ahead of the application clock are tolerated,
+	// but a poisoned far-future row must never become the retention anchor.
+	quoteHistoryFutureSkew = 5 * time.Minute
 )
 
 // RecordQuoteSnapshot persists at most one quote-derived statistics snapshot
@@ -156,15 +158,20 @@ func (s *Store) RecordQuoteSnapshot(ticker string, snapshot model.StatisticSnaps
 }
 
 // RecordQuoteSnapshots seeds missing calendar months from a bounded historical
-// backfill and records the current observation in one locked disk save. Any
-// month already represented in persisted history is authoritative and is not
-// replaced by a historical seed. The current point still follows the normal
-// same-UTC-day rule: a later asOf replaces an existing observation, while an
-// equal-timestamp provider correction replaces only when its payload changed.
+// backfill and records the current observation in one locked disk save. A month
+// already represented in persisted history remains authoritative: backfill may
+// only add fields and matching provenance that its latest persisted observation
+// does not have, without changing any value, source, or timestamp already on
+// disk. The current point still follows the normal same-UTC-day rule: a later
+// asOf replaces an existing observation, while an equal-timestamp provider
+// correction replaces only when its payload changed.
 func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.StatisticSnapshot, current model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
 	current, currentAt, err := validatedStatisticSnapshot(current)
 	if err != nil {
 		return nil, err
+	}
+	if currentAt.After(time.Now().UTC().Add(quoteHistoryFutureSkew)) {
+		return nil, errors.New("quote snapshot asOf exceeds allowed future skew")
 	}
 	type candidate struct {
 		snapshot model.StatisticSnapshot
@@ -194,30 +201,28 @@ func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.Stat
 		return nil, ErrNotFound
 	}
 	history := cloneStatisticSnapshots(equity.QuoteHistory)
-	occupiedMonths := make(map[string]bool, len(history)+1)
-	for _, snapshot := range history {
-		observed, parseErr := time.Parse(time.RFC3339Nano, snapshot.AsOf)
-		if parseErr == nil {
-			occupiedMonths[observed.UTC().Format("2006-01")] = true
-		}
-	}
 	// Never seed the current month: its separately derived current snapshot may
 	// carry exact SEC-share-based market value fields that backfill must not.
-	occupiedMonths[currentAt.Format("2006-01")] = true
+	currentMonth := currentAt.Format("2006-01")
 	changed := false
 	for _, row := range backfill {
 		if !row.observed.Before(currentAt) {
 			continue
 		}
 		month := row.observed.Format("2006-01")
-		if occupiedMonths[month] {
+		if month == currentMonth {
+			continue
+		}
+		if index, occupied := latestSnapshotIndexInMonth(history, month); occupied {
+			var enriched bool
+			history[index], enriched = enrichStatisticSnapshotMissing(history[index], row.snapshot)
+			changed = changed || enriched
 			continue
 		}
 		var accepted bool
 		history, accepted = mergeQuoteHistory(history, row.snapshot, row.observed)
 		if accepted {
 			changed = true
-			occupiedMonths[month] = true
 		}
 	}
 	var currentAccepted bool
@@ -226,17 +231,80 @@ func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.Stat
 	if !changed {
 		return cloneStatisticSnapshots(equity.QuoteHistory), nil
 	}
-	previousHistory := equity.QuoteHistory
-	previousVersion := s.state.Version
-	previousUpdatedAt := s.state.UpdatedAt
-	equity.QuoteHistory = history
-	if err := s.saveLocked(); err != nil {
-		equity.QuoteHistory = previousHistory
-		s.state.Version = previousVersion
-		s.state.UpdatedAt = previousUpdatedAt
+	next := cloneState(s.state)
+	next.Tickers[strings.ToUpper(strings.TrimSpace(ticker))].QuoteHistory = history
+	if err := s.commitLocked(next); err != nil {
 		return nil, err
 	}
 	return cloneStatisticSnapshots(history), nil
+}
+
+func latestSnapshotIndexInMonth(history []model.StatisticSnapshot, month string) (int, bool) {
+	latestIndex := -1
+	var latest time.Time
+	for index, snapshot := range history {
+		observed, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+		if err != nil {
+			continue
+		}
+		observed = observed.UTC()
+		if observed.Format("2006-01") != month || (latestIndex >= 0 && !observed.After(latest)) {
+			continue
+		}
+		latestIndex = index
+		latest = observed
+	}
+	return latestIndex, latestIndex >= 0
+}
+
+// enrichStatisticSnapshotMissing adds only absent backfill fields to an
+// authoritative persisted observation. Existing values and provenance always
+// win. Missing provenance for an existing field is filled only when the
+// backfill carries the exact same value, avoiding false attribution.
+func enrichStatisticSnapshotMissing(current, backfill model.StatisticSnapshot) (model.StatisticSnapshot, bool) {
+	merged := cloneStatisticSnapshot(current)
+	changed := false
+	for key, value := range backfill.Numeric {
+		existing, numericExists := merged.Numeric[key]
+		_, textExists := merged.Text[key]
+		if !numericExists && !textExists {
+			if merged.Numeric == nil {
+				merged.Numeric = make(map[string]float64)
+			}
+			merged.Numeric[key] = value
+			changed = true
+		}
+		if source := backfill.Sources[key]; source != "" {
+			if _, sourced := merged.Sources[key]; !sourced && !textExists && (!numericExists || existing == value) {
+				if merged.Sources == nil {
+					merged.Sources = make(map[string]string)
+				}
+				merged.Sources[key] = source
+				changed = true
+			}
+		}
+	}
+	for key, value := range backfill.Text {
+		existing, textExists := merged.Text[key]
+		_, numericExists := merged.Numeric[key]
+		if !textExists && !numericExists {
+			if merged.Text == nil {
+				merged.Text = make(map[string]string)
+			}
+			merged.Text[key] = value
+			changed = true
+		}
+		if source := backfill.Sources[key]; source != "" {
+			if _, sourced := merged.Sources[key]; !sourced && !numericExists && (!textExists || existing == value) {
+				if merged.Sources == nil {
+					merged.Sources = make(map[string]string)
+				}
+				merged.Sources[key] = source
+				changed = true
+			}
+		}
+	}
+	return merged, changed
 }
 
 func validatedStatisticSnapshot(snapshot model.StatisticSnapshot) (model.StatisticSnapshot, time.Time, error) {
@@ -264,9 +332,12 @@ type datedStatisticSnapshot struct {
 
 func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.StatisticSnapshot, incomingAt time.Time) ([]model.StatisticSnapshot, bool) {
 	byDay := make(map[string]datedStatisticSnapshot, len(history)+1)
+	sanitized := false
+	maximumObservedAt := time.Now().UTC().Add(quoteHistoryFutureSkew)
 	for _, snapshot := range history {
 		observed, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
-		if err != nil {
+		if err != nil || observed.After(maximumObservedAt) {
+			sanitized = true
 			continue
 		}
 		observed = observed.UTC()
@@ -279,16 +350,23 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 	}
 
 	incomingDay := incomingAt.Format("2006-01-02")
+	acceptIncoming := true
 	if current, exists := byDay[incomingDay]; exists {
 		if incomingAt.Before(current.observed) {
-			return cloneStatisticSnapshots(history), false
-		}
-		incoming = mergeSameDayStatisticSnapshot(current.snapshot, incoming, incomingAt)
-		if incomingAt.Equal(current.observed) && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
-			return cloneStatisticSnapshots(history), false
+			acceptIncoming = false
+		} else {
+			incoming = mergeSameDayStatisticSnapshot(current.snapshot, incoming, incomingAt)
+			if incomingAt.Equal(current.observed) && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
+				acceptIncoming = false
+			}
 		}
 	}
-	byDay[incomingDay] = datedStatisticSnapshot{snapshot: incoming, observed: incomingAt}
+	if acceptIncoming {
+		byDay[incomingDay] = datedStatisticSnapshot{snapshot: incoming, observed: incomingAt}
+	}
+	if !acceptIncoming && !sanitized {
+		return cloneStatisticSnapshots(history), false
+	}
 
 	latest := incomingAt
 	for _, row := range byDay {
@@ -311,7 +389,7 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 	for index, row := range rows {
 		out[index] = cloneStatisticSnapshot(row.snapshot)
 	}
-	return out, true
+	return out, acceptIncoming || sanitized
 }
 
 // mergeSameDayStatisticSnapshot keeps a daily observation monotonic when a
@@ -325,9 +403,7 @@ func mergeSameDayStatisticSnapshot(current, incoming model.StatisticSnapshot, in
 	// AsOf always comes from the incoming observation, so its provenance must
 	// move with it (or be cleared) rather than describe the retained timestamp.
 	merged.AsOfSource = incoming.AsOfSource
-	if incoming.Source != "" {
-		merged.Source = incoming.Source
-	}
+	merged.Source = incoming.Source
 
 	for key, value := range incoming.Numeric {
 		if merged.Numeric == nil {
@@ -410,26 +486,31 @@ func (s *Store) SetError(ticker string, refreshErr error) error {
 func (s *Store) SetMacro(series model.MacroSeries) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(series.Vintages.Points) == 0 && len(s.state.Macro.Vintages.Points) > 0 {
-		series.Vintages = s.state.Macro.Vintages
+	now := time.Now().UTC()
+	next := cloneState(s.state)
+	if len(series.Vintages.Points) == 0 && len(next.Macro.Vintages.Points) > 0 {
+		series.Vintages = next.Macro.Vintages
 	}
-	if len(series.Options.Snapshots) == 0 && len(s.state.Macro.Options.Snapshots) > 0 {
-		series.Options = s.state.Macro.Options
+	if len(series.Options.Snapshots) == 0 && len(next.Macro.Options.Snapshots) > 0 {
+		series.Options = next.Macro.Options
 	}
 	series.Error = ""
 	if series.UpdatedAt.IsZero() {
-		series.UpdatedAt = time.Now().UTC()
+		series.UpdatedAt = now
 	}
-	s.state.Macro = series
-	return s.saveLocked()
+	series.LastAttemptAt = now
+	series.LastSuccessAt = series.UpdatedAt
+	next.Macro = series
+	return s.commitLocked(next)
 }
 
 func (s *Store) SetMacroError(refreshErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.Macro.Error = refreshErr.Error()
-	s.state.Macro.UpdatedAt = time.Now().UTC()
-	return s.saveLocked()
+	next := cloneState(s.state)
+	next.Macro.Error = refreshErr.Error()
+	next.Macro.LastAttemptAt = time.Now().UTC()
+	return s.commitLocked(next)
 }
 
 func (s *Store) Tickers() []string {
@@ -443,30 +524,97 @@ func (s *Store) Tickers() []string {
 	return tickers
 }
 
+// Metadata returns the readiness-relevant state without serializing and
+// cloning the full filing and market-history payload.
+func (s *Store) Metadata() (int, time.Time) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.state.Tickers), s.state.UpdatedAt
+}
+
 func (s *Store) update(ticker string, mutate func(*model.Equity)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	equity, exists := s.state.Tickers[strings.ToUpper(ticker)]
+	next := cloneState(s.state)
+	equity, exists := next.Tickers[strings.ToUpper(ticker)]
 	if !exists {
 		return ErrNotFound
 	}
 	mutate(equity)
-	return s.saveLocked()
+	return s.commitLocked(next)
 }
 
 func (s *Store) saveLocked() error {
-	s.state.Version = model.StateVersion
-	s.state.UpdatedAt = time.Now().UTC()
-	data, err := json.MarshalIndent(s.state, "", "  ")
+	return s.commitLocked(cloneState(s.state))
+}
+
+// commitLocked uses copy-on-write publication: callers build a complete next
+// state, it is durably replaced on disk, and only then becomes visible to
+// readers. A failed write therefore cannot leave memory ahead of the restart
+// source of truth.
+func (s *Store) commitLocked(next model.State) error {
+	next.Version = model.StateVersion
+	next.UpdatedAt = time.Now().UTC()
+	data, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(s.path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	tmpPath := tmp.Name()
+	committed := false
+	defer func() {
+		_ = tmp.Close()
+		if !committed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return err
+	}
+	committed = true
+	var durabilityErr error
+	if directory, openErr := os.Open(dir); openErr == nil {
+		syncErr := directory.Sync()
+		closeErr := directory.Close()
+		if syncErr != nil {
+			durabilityErr = syncErr
+		} else if closeErr != nil {
+			durabilityErr = closeErr
+		}
+	} else {
+		durabilityErr = openErr
+	}
+	// Rename has already published the new file. Keep in-memory state aligned
+	// even when the final directory durability barrier reports an error.
+	s.state = next
+	return durabilityErr
+}
+
+func cloneState(state model.State) model.State {
+	data, _ := json.Marshal(state)
+	var clone model.State
+	_ = json.Unmarshal(data, &clone)
+	if clone.Tickers == nil {
+		clone.Tickers = make(map[string]*model.Equity)
+	}
+	return clone
 }
