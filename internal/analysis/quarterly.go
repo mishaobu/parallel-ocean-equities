@@ -10,27 +10,29 @@ import (
 )
 
 var (
-	operatingIncomeTags = []string{"OperatingIncomeLoss"}
-	grossProfitTags     = []string{"GrossProfit"}
-	costOfRevenueTags   = []string{"CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoodsAndServicesExcludingDepreciationDepletionAndAmortization"}
-	pretaxIncomeTags    = []string{"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"}
-	incomeTaxTags       = []string{"IncomeTaxExpenseBenefit"}
-	stockCompTags       = []string{"ShareBasedCompensation"}
-	daTags              = []string{"DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation"}
-	operatingCashTags   = []string{"NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"}
-	dividendTags        = []string{"PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"}
-	shareTags           = []string{"WeightedAverageNumberOfDilutedSharesOutstanding"}
-	cashTags            = []string{"CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"}
-	investmentTags      = []string{"MarketableSecuritiesCurrent", "ShortTermInvestments"}
-	currentDebtTags     = []string{"LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"}
-	noncurrentDebtTags  = []string{"LongTermDebtNoncurrent"}
-	totalDebtTags       = []string{"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities", "DebtLongtermAndShorttermCombinedAmount", "DebtAndCapitalLeaseObligations", "LongTermDebt"}
-	assetTags           = []string{"Assets"}
-	liabilityTags       = []string{"Liabilities"}
-	equityTags          = []string{"StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"}
-	inventoryTags       = []string{"InventoryNet", "InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"}
-	receivableTags      = []string{"AccountsReceivableNetCurrent", "AccountsNotesAndLoansReceivableNetCurrent"}
-	payableTags         = []string{"AccountsPayableCurrent"}
+	operatingIncomeTags  = []string{"OperatingIncomeLoss"}
+	grossProfitTags      = []string{"GrossProfit"}
+	costOfRevenueTags    = []string{"CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold", "CostOfGoodsAndServicesExcludingDepreciationDepletionAndAmortization"}
+	pretaxIncomeTags     = []string{"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"}
+	incomeTaxTags        = []string{"IncomeTaxExpenseBenefit"}
+	stockCompTags        = []string{"ShareBasedCompensation"}
+	daTags               = []string{"DepreciationDepletionAndAmortization", "DepreciationAndAmortization", "Depreciation"}
+	operatingCashTags    = []string{"NetCashProvidedByUsedInOperatingActivities", "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"}
+	dividendTags         = []string{"PaymentsOfDividends", "PaymentsOfDividendsCommonStock", "PaymentsOfOrdinaryDividends"}
+	shareTags            = []string{"WeightedAverageNumberOfDilutedSharesOutstanding"}
+	cashTags             = []string{"CashAndCashEquivalentsAtCarryingValue", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash"}
+	investmentTags       = []string{"MarketableSecuritiesCurrent", "ShortTermInvestments"}
+	currentDebtTags      = []string{"LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"}
+	noncurrentDebtTags   = []string{"LongTermDebtNoncurrent"}
+	totalDebtTags        = []string{"LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities", "DebtLongtermAndShorttermCombinedAmount", "DebtAndCapitalLeaseObligations", "LongTermDebt"}
+	assetTags            = []string{"Assets"}
+	currentAssetTags     = []string{"AssetsCurrent"}
+	liabilityTags        = []string{"Liabilities"}
+	currentLiabilityTags = []string{"LiabilitiesCurrent"}
+	equityTags           = []string{"StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"}
+	inventoryTags        = []string{"InventoryNet", "InventoryNetOfAllowancesCustomerAdvancesAndProgressBillings"}
+	receivableTags       = []string{"AccountsReceivableNetCurrent", "AccountsNotesAndLoansReceivableNetCurrent"}
+	payableTags          = []string{"AccountsPayableCurrent"}
 )
 
 type quarterFact struct {
@@ -82,12 +84,15 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 	noncurrentDebt := instantQuarterFacts(gaap, noncurrentDebtTags, "USD")
 	totalDebt := instantQuarterFacts(gaap, totalDebtTags, "USD")
 	assets := instantQuarterFacts(gaap, assetTags, "USD")
+	currentAssets := instantQuarterFacts(gaap, currentAssetTags, "USD")
 	liabilities := instantQuarterFacts(gaap, liabilityTags, "USD")
+	currentLiabilities := instantQuarterFacts(gaap, currentLiabilityTags, "USD")
 	equity := instantQuarterFacts(gaap, equityTags, "USD")
 	inventory := instantQuarterFacts(gaap, inventoryTags, "USD")
 	receivables := instantQuarterFacts(gaap, receivableTags, "USD")
 	payables := instantQuarterFacts(gaap, payableTags, "USD")
 	fiscalYearEndMonth := inferFiscalYearEndMonth(gaap)
+	actualShares := actualSharesOutstandingByAccession(response)
 
 	rows := make([]model.QuarterlyPoint, 0, len(anchors))
 	for periodEnd, anchor := range anchors {
@@ -126,10 +131,16 @@ func extractQuarterlies(response companyFacts, cik string) ([]model.QuarterlyPoi
 		if value := quarterRaw(shares[periodEnd]); value != nil {
 			row.DilutedSharesB = floatPtr(*value / 1e9)
 		}
+		if value, ok := actualShares[anchor.accession]; ok {
+			row.SharesOutstandingB = floatPtr(value.Val / 1e9)
+			row.SharesOutstandingAsOf = value.End
+		}
 		row.CashB = quarterBillions(cash[periodEnd])
 		row.InvestmentsB = quarterBillions(investments[periodEnd])
 		row.AssetsB = quarterBillions(assets[periodEnd])
+		row.CurrentAssetsB = quarterBillions(currentAssets[periodEnd])
 		row.LiabilitiesB = quarterBillions(liabilities[periodEnd])
+		row.CurrentLiabilitiesB = quarterBillions(currentLiabilities[periodEnd])
 		row.EquityB = quarterBillions(equity[periodEnd])
 		row.InventoryB = quarterBillions(inventory[periodEnd])
 		row.ReceivablesB = quarterBillions(receivables[periodEnd])

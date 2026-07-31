@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -11,6 +12,197 @@ import (
 
 	"github.com/mishaobu/parallel-ocean-equities/internal/model"
 )
+
+func TestLatestActualSharesOutstandingUsesLatestActualPeriod(t *testing.T) {
+	response := companyFacts{Facts: map[string]map[string]factConcept{"dei": {
+		"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": {
+			{End: "2024-12-31", Val: 1.5e9, Form: "10-K", Filed: "2025-02-01"},
+			{End: "2025-03-31", Val: 1.4e9, Form: "10-Q", Filed: "2025-04-20"},
+			{End: "2025-03-31", Val: 1.35e9, Form: "10-Q/A", Filed: "2025-04-30"},
+			{End: "2025-06-30", Val: 1.3e9, Form: "8-K", Filed: "2025-07-15"},
+			{Start: "2025-04-01", End: "2025-06-30", Val: 1.25e9, Form: "10-Q", Filed: "2025-07-20"},
+			{End: "2025-09-30", Val: 1.2e9, Form: "10-Q", Filed: "2025-07-20"},
+		}}},
+	}}}
+
+	shares, ok := latestActualSharesOutstanding(response)
+	if !ok {
+		t.Fatal("expected an actual shares-outstanding fact")
+	}
+	if shares.Val != 1.35e9 || shares.End != "2025-03-31" || shares.Filed != "2025-04-30" {
+		t.Fatalf("unexpected shares-outstanding fact: %#v", shares)
+	}
+}
+
+func TestSECAnalyzePopulatesOnlyExactSharesOutstanding(t *testing.T) {
+	baseFacts := map[string]map[string]factConcept{"us-gaap": {
+		"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(
+			fact{Start: "2024-01-01", End: "2024-12-31", Val: 100e9, Accn: "0000000001-25-000001", FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-01"},
+			fact{Start: "2025-01-01", End: "2025-03-31", Val: 25e9, Accn: "0000000001-25-000002", FY: 2025, FP: "Q1", Form: "10-Q", Filed: "2025-04-20"},
+		),
+		"WeightedAverageNumberOfDilutedSharesOutstanding": {Units: map[string][]fact{"shares": {
+			{Start: "2024-01-01", End: "2024-12-31", Val: 9e9, Accn: "0000000001-25-000001", FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-01"},
+		}}},
+	}}
+
+	analyze := func(t *testing.T, facts map[string]map[string]factConcept) *model.Equity {
+		t.Helper()
+		payload, err := json.Marshal(companyFacts{EntityName: "Example Inc.", Facts: facts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(string(payload))),
+			}, nil
+		})}
+		client := NewSECClient("test", "", httpClient)
+		existing := &model.Equity{
+			CIK: "0000000001",
+			Current: model.CurrentMetrics{
+				SharesOutstandingB:    floatPtr(99),
+				SharesOutstandingAsOf: "2000-01-01",
+			},
+		}
+		result, err := client.Analyze(context.Background(), "TEST", existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	t.Run("exact DEI instant fact", func(t *testing.T) {
+		facts := cloneFactNamespaces(baseFacts)
+		facts["dei"] = map[string]factConcept{
+			"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": {
+				{End: "2025-04-10", Val: 1.25e9, Form: "10-Q", Filed: "2025-04-20"},
+			}}},
+		}
+		result := analyze(t, facts)
+		assertFloat(t, "actual shares outstanding", result.Current.SharesOutstandingB, 1.25)
+		if result.Current.SharesOutstandingAsOf != "2025-04-10" {
+			t.Fatalf("unexpected shares-outstanding as-of date: %q", result.Current.SharesOutstandingAsOf)
+		}
+	})
+
+	t.Run("no diluted-share fallback", func(t *testing.T) {
+		result := analyze(t, cloneFactNamespaces(baseFacts))
+		if result.Current.SharesOutstandingB != nil || result.Current.SharesOutstandingAsOf != "" {
+			t.Fatalf("unexpected shares-outstanding fallback: %#v", result.Current)
+		}
+	})
+}
+
+func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *testing.T) {
+	const (
+		quarterAccession = "0000000001-24-000001"
+		annualAccession  = "0000000001-25-000004"
+	)
+
+	gaap := map[string]factConcept{
+		"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(
+			fact{Start: "2024-01-01", End: "2024-03-31", Val: 25e9, Accn: quarterAccession, FY: 2024, FP: "Q1", Form: "10-Q", Filed: "2024-04-20"},
+			fact{Start: "2024-01-01", End: "2024-12-31", Val: 100e9, Accn: annualAccession, FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-20"},
+		),
+		"WeightedAverageNumberOfDilutedSharesOutstanding": {Units: map[string][]fact{"shares": {
+			{Start: "2024-01-01", End: "2024-03-31", Val: 1.4e9, Accn: quarterAccession, FY: 2024, FP: "Q1", Form: "10-Q", Filed: "2024-04-20"},
+			{Start: "2024-01-01", End: "2024-12-31", Val: 1.3e9, Accn: annualAccession, FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-20"},
+		}}},
+	}
+	matchingFacts := []fact{
+		{End: "2024-04-10", Val: 1.35e9, Accn: quarterAccession, Form: "10-Q", Filed: "2024-04-20"},
+		{End: "2024-12-31", Val: 1.28e9, Accn: annualAccession, Form: "10-K", Filed: "2025-02-20"},
+		{End: "2025-02-10", Val: 1.25e9, Accn: annualAccession, Form: "10-K", Filed: "2025-02-20"},
+	}
+
+	tests := []struct {
+		name        string
+		deiFacts    []fact
+		customFacts []fact
+		wantAnnual  *float64
+		wantQuarter *float64
+	}{
+		{
+			name:        "exact filing accessions",
+			deiFacts:    matchingFacts,
+			wantAnnual:  floatPtr(1.25),
+			wantQuarter: floatPtr(1.35),
+		},
+		{
+			name: "different filing accessions",
+			deiFacts: []fact{
+				{End: "2024-04-10", Val: 9.35e9, Accn: "0000000001-24-999999", Form: "10-Q", Filed: "2024-04-20"},
+				{End: "2025-02-10", Val: 9.25e9, Accn: "0000000001-25-999999", Form: "10-K", Filed: "2025-02-20"},
+			},
+		},
+		{
+			name:        "missing DEI fact",
+			customFacts: matchingFacts,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts := map[string]map[string]factConcept{"us-gaap": gaap}
+			if test.deiFacts != nil {
+				facts["dei"] = map[string]factConcept{
+					"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": test.deiFacts}},
+				}
+			}
+			if test.customFacts != nil {
+				facts["example"] = map[string]factConcept{
+					"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": test.customFacts}},
+				}
+			}
+			response := companyFacts{Facts: facts}
+
+			annuals, err := extractAnnuals(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			quarters, err := extractQuarterlies(response, "0000000001")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(annuals) != 1 || len(quarters) != 1 {
+				t.Fatalf("unexpected history lengths: annual=%d quarterly=%d", len(annuals), len(quarters))
+			}
+
+			assertFloat(t, "annual diluted shares", annuals[0].DilutedSharesB, 1.3)
+			assertFloat(t, "quarterly diluted shares", quarters[0].DilutedSharesB, 1.4)
+			if test.wantAnnual == nil {
+				if annuals[0].SharesOutstandingB != nil || annuals[0].SharesOutstandingAsOf != "" {
+					t.Fatalf("unexpected annual actual-share match: %#v", annuals[0])
+				}
+			} else {
+				assertFloat(t, "annual actual shares", annuals[0].SharesOutstandingB, *test.wantAnnual)
+				if annuals[0].SharesOutstandingAsOf != "2025-02-10" {
+					t.Fatalf("unexpected annual actual-share date: %q", annuals[0].SharesOutstandingAsOf)
+				}
+			}
+			if test.wantQuarter == nil {
+				if quarters[0].SharesOutstandingB != nil || quarters[0].SharesOutstandingAsOf != "" {
+					t.Fatalf("unexpected quarterly actual-share match: %#v", quarters[0])
+				}
+			} else {
+				assertFloat(t, "quarterly actual shares", quarters[0].SharesOutstandingB, *test.wantQuarter)
+				if quarters[0].SharesOutstandingAsOf != "2024-04-10" {
+					t.Fatalf("unexpected quarterly actual-share date: %q", quarters[0].SharesOutstandingAsOf)
+				}
+			}
+		})
+	}
+}
+
+func cloneFactNamespaces(source map[string]map[string]factConcept) map[string]map[string]factConcept {
+	clone := make(map[string]map[string]factConcept, len(source))
+	for namespace, concepts := range source {
+		clone[namespace] = concepts
+	}
+	return clone
+}
 
 func TestExtractQuarterliesBuildsDiscreteQ4AndBalanceSheet(t *testing.T) {
 	response := companyFacts{Facts: map[string]map[string]factConcept{"us-gaap": {
@@ -230,6 +422,44 @@ func TestExtractAnnualsUsesFirstAvailableFilingAndMergesMetrics(t *testing.T) {
 	}
 	assertFloat(t, "annual gross profit", rows[0].GrossProfitB, 45)
 	assertFloat(t, "annual stock compensation", rows[0].StockCompB, 2)
+}
+
+func TestExtractAnnualsIncludesCurrentBalanceSheetAmounts(t *testing.T) {
+	response := companyFacts{Facts: map[string]map[string]factConcept{"us-gaap": {
+		"Revenues":           {Units: map[string][]fact{"USD": {{Start: "2024-01-01", End: "2024-12-31", Val: 100e9, FP: "FY", Form: "10-K", Filed: "2025-02-01"}}}},
+		"AssetsCurrent":      instantConcept(2024, "FY", 42e9),
+		"LiabilitiesCurrent": instantConcept(2024, "FY", 21e9),
+	}}}
+
+	rows, err := extractAnnuals(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one annual row, got %d", len(rows))
+	}
+	assertFloat(t, "annual current assets", rows[0].CurrentAssetsB, 42)
+	assertFloat(t, "annual current liabilities", rows[0].CurrentLiabilitiesB, 21)
+}
+
+func TestExtractQuarterliesIncludesCurrentBalanceSheetAmounts(t *testing.T) {
+	response := companyFacts{Facts: map[string]map[string]factConcept{"us-gaap": {
+		"Revenues": durationConcept(
+			quarterDuration(2024, "Q1", "2024-01-01", "2024-03-31", 25e9),
+		),
+		"AssetsCurrent":      instantConceptAt(2024, "Q1", "2024-03-31", 12e9),
+		"LiabilitiesCurrent": instantConceptAt(2024, "Q1", "2024-03-31", 6e9),
+	}}}
+
+	rows, err := extractQuarterlies(response, "0000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one quarterly row, got %d", len(rows))
+	}
+	assertFloat(t, "quarterly current assets", rows[0].CurrentAssetsB, 12)
+	assertFloat(t, "quarterly current liabilities", rows[0].CurrentLiabilitiesB, 6)
 }
 
 func TestDecodeThetaRowsSupportsArrayAndEnvelope(t *testing.T) {

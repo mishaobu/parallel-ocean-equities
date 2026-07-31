@@ -2,10 +2,15 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +40,439 @@ func TestYahooMarketDecodesMonthlyClosesAtMonthEnd(t *testing.T) {
 	}
 	if prices[0].TotalReturnClose == nil || *prices[0].TotalReturnClose != 90 || prices[1].TotalReturnClose == nil || *prices[1].TotalReturnClose != 115 {
 		t.Fatalf("adjusted closes missing: %v", prices)
+	}
+}
+
+func TestYahooMarketBuildsLiveQuoteFromChartHistory(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 15, 30, 0, 0, time.UTC)
+	start := asOf.AddDate(0, 0, -399)
+	timestamps := make([]int64, 400)
+	closes := make([]float64, 400)
+	volumes := make([]float64, 400)
+	for index := range timestamps {
+		timestamps[index] = start.AddDate(0, 0, index).Unix()
+		closes[index] = float64(index + 1)
+		volumes[index] = float64(1000 + index)
+	}
+	dividends := map[string]any{}
+	for index, days := range []int{-300, -210, -120, -30} {
+		date := asOf.AddDate(0, 0, days).Unix()
+		dividends[fmt.Sprintf("%d", index)] = map[string]any{"amount": 0.25, "date": date}
+	}
+	historyPayload := map[string]any{"chart": map[string]any{
+		"result": []any{map[string]any{
+			"meta": map[string]any{
+				"symbol": "AAPL", "currency": "USD", "fullExchangeName": "NasdaqGS", "marketState": "REGULAR",
+				"regularMarketPrice": 405.0, "regularMarketTime": asOf.Unix(), "previousClose": 400.0,
+				"fiftyTwoWeekHigh": 420.0, "fiftyTwoWeekLow": 180.0,
+			},
+			"timestamp":  timestamps,
+			"indicators": map[string]any{"quote": []any{map[string]any{"close": closes, "volume": volumes}}},
+			"events": map[string]any{
+				"dividends": dividends,
+				"splits":    map[string]any{"split": map[string]any{"date": asOf.AddDate(-2, 0, 0).Unix(), "numerator": 4, "denominator": 1, "splitRatio": "4:1"}},
+			},
+		}},
+		"error": nil,
+	}}
+	currentPayload := map[string]any{"chart": map[string]any{
+		"result": []any{map[string]any{
+			"meta": map[string]any{
+				"symbol": "AAPL", "currency": "USD", "fullExchangeName": "NasdaqGS", "marketState": "REGULAR",
+				"regularMarketPrice": 405.0, "regularMarketTime": asOf.Unix(), "previousClose": 400.0,
+				"fiftyTwoWeekHigh": 420.0, "fiftyTwoWeekLow": 180.0,
+			},
+			"timestamp": timestamps[len(timestamps)-5:],
+			"indicators": map[string]any{"quote": []any{map[string]any{
+				"close": closes[len(closes)-5:], "volume": volumes[len(volumes)-5:],
+			}}},
+		}},
+		"error": nil,
+	}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("interval") != "1d" {
+			http.Error(w, "unexpected quote interval: "+r.URL.String(), http.StatusBadRequest)
+			return
+		}
+		var payload map[string]any
+		switch r.URL.Query().Get("range") {
+		case "5d":
+			if r.URL.Query().Get("events") != "history" {
+				http.Error(w, "unexpected current quote request: "+r.URL.String(), http.StatusBadRequest)
+				return
+			}
+			payload = currentPayload
+		case "10y":
+			if r.URL.Query().Get("events") != "div,splits" {
+				http.Error(w, "unexpected history request: "+r.URL.String(), http.StatusBadRequest)
+				return
+			}
+			payload = historyPayload
+		default:
+			http.Error(w, "unexpected quote request: "+r.URL.String(), http.StatusBadRequest)
+			return
+		}
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	defer server.Close()
+	provider := NewYahooMarket(server.Client())
+	provider.baseURL = server.URL
+	quote, err := provider.Quote(context.Background(), "AAPL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.Ticker != "AAPL" || quote.Source != yahooQuoteSource || quote.MarketState != "REGULAR" || quote.Exchange != "NasdaqGS" || quote.Currency != "USD" {
+		t.Fatalf("unexpected quote identity: %+v", quote)
+	}
+	assertLiveFloat(t, "price", quote.Price, 405)
+	assertLiveFloat(t, "previous close", quote.PreviousClose, 400)
+	assertLiveFloat(t, "change", quote.Change, 5)
+	assertLiveFloat(t, "change percent", quote.ChangePercent, 0.0125)
+	assertLiveFloat(t, "50-day average", quote.MovingAverage50Day, 374.5)
+	assertLiveFloat(t, "200-day average", quote.MovingAverage200Day, 299.5)
+	assertLiveFloat(t, "10-day average volume", quote.AverageVolume10Day, 1393.5)
+	assertLiveFloat(t, "3-month average volume", quote.AverageVolume3Month, 1353)
+	assertLiveFloat(t, "trailing dividend rate", quote.TrailingAnnualDividendRate, 1)
+	assertLiveFloat(t, "forward dividend rate", quote.ForwardAnnualDividendRate, 1)
+	assertLiveFloat(t, "52-week high", quote.High52Week, 420)
+	assertLiveFloat(t, "52-week low", quote.Low52Week, 180)
+	if quote.AverageDividendYield5Year != nil {
+		t.Fatalf("partial five-year history should not produce an average yield: %+v", quote)
+	}
+	if quote.ExDividendDate != asOf.AddDate(0, 0, -30).Format("2006-01-02") || quote.LastDividendDate != "" {
+		t.Fatalf("unexpected dividend dates: %+v", quote)
+	}
+	if !strings.Contains(quote.FieldSources["forwardAnnualDividendRate"], "estimate") || !strings.Contains(quote.FieldSources["averageVolume10Day"], "completed") {
+		t.Fatalf("calculated fields need explicit methodology: %+v", quote.FieldSources)
+	}
+	if quote.LastSplitFactor != "4:1" || quote.LastSplitDate != asOf.AddDate(-2, 0, 0).Format("2006-01-02") {
+		t.Fatalf("unexpected split: %+v", quote)
+	}
+	if len(quote.History) == 0 || quote.History[len(quote.History)-1].AsOf != asOf.AddDate(0, 0, -1).Format(time.RFC3339) {
+		t.Fatalf("monthly history should end at the last completed session: %+v", quote.History)
+	}
+}
+
+func TestYahooQuoteCachesLongHistoryAndUsesRecentStaleDataOnRefreshError(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 15, 30, 0, 0, time.UTC)
+	currentPayload, historyPayload := yahooQuoteCacheTestPayloads(asOf)
+	var currentCalls atomic.Int32
+	var historyCalls atomic.Int32
+	var failHistory atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("range") {
+		case "5d":
+			currentCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(currentPayload)
+		case "10y":
+			historyCalls.Add(1)
+			if failHistory.Load() {
+				http.Error(w, "temporary upstream failure", http.StatusServiceUnavailable)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(historyPayload)
+		default:
+			http.Error(w, "unexpected request: "+r.URL.String(), http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	provider := NewYahooMarket(server.Client())
+	provider.baseURL = server.URL
+	defer clearYahooHistoryCacheForProvider(provider)
+
+	first, err := provider.Quote(context.Background(), "cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := provider.Quote(context.Background(), "CACHE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentCalls.Load() != 2 || historyCalls.Load() != 1 {
+		t.Fatalf("requests current=%d history=%d, want current=2 history=1", currentCalls.Load(), historyCalls.Load())
+	}
+	if len(first.History) == 0 || len(second.History) == 0 {
+		t.Fatalf("cached history disappeared: first=%+v second=%+v", first.History, second.History)
+	}
+
+	key := yahooHistoryCacheKey{provider: provider, ticker: "CACHE"}
+	yahooHistoryCache.Lock()
+	entry := yahooHistoryCache.entries[key]
+	entry.cachedAt = time.Now().UTC().Add(-yahooHistoryCacheTTL - time.Minute)
+	yahooHistoryCache.entries[key] = entry
+	yahooHistoryCache.Unlock()
+	failHistory.Store(true)
+
+	stale, err := provider.Quote(context.Background(), "CACHE")
+	if err != nil {
+		t.Fatalf("recent stale history should preserve a live quote during refresh failure: %v", err)
+	}
+	if currentCalls.Load() != 3 || historyCalls.Load() != 2 || len(stale.History) == 0 {
+		t.Fatalf("stale fallback current=%d history=%d quote=%+v", currentCalls.Load(), historyCalls.Load(), stale)
+	}
+	assertLiveFloat(t, "stale-fallback live price", stale.Price, 101)
+}
+
+func TestYahooQuoteHistoryFetchIsSingleflight(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 15, 30, 0, 0, time.UTC)
+	currentPayload, historyPayload := yahooQuoteCacheTestPayloads(asOf)
+	var currentCalls atomic.Int32
+	var historyCalls atomic.Int32
+	historyStarted := make(chan struct{})
+	releaseHistory := make(chan struct{})
+	var startedOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("range") {
+		case "5d":
+			currentCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(currentPayload)
+		case "10y":
+			historyCalls.Add(1)
+			startedOnce.Do(func() { close(historyStarted) })
+			<-releaseHistory
+			_ = json.NewEncoder(w).Encode(historyPayload)
+		default:
+			http.Error(w, "unexpected request: "+r.URL.String(), http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	provider := NewYahooMarket(server.Client())
+	provider.baseURL = server.URL
+	defer clearYahooHistoryCacheForProvider(provider)
+
+	const callers = 12
+	start := make(chan struct{})
+	errorsByCaller := make(chan error, callers)
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	for range callers {
+		go func() {
+			defer wait.Done()
+			<-start
+			_, err := provider.Quote(context.Background(), "SYNC")
+			errorsByCaller <- err
+		}()
+	}
+	close(start)
+	select {
+	case <-historyStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("history request did not start")
+	}
+	close(releaseHistory)
+	wait.Wait()
+	close(errorsByCaller)
+	for err := range errorsByCaller {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if historyCalls.Load() != 1 || currentCalls.Load() != callers {
+		t.Fatalf("requests current=%d history=%d, want current=%d history=1", currentCalls.Load(), historyCalls.Load(), callers)
+	}
+}
+
+func yahooQuoteCacheTestPayloads(asOf time.Time) (map[string]any, map[string]any) {
+	currentPayload := map[string]any{"chart": map[string]any{
+		"result": []any{map[string]any{
+			"meta": map[string]any{
+				"symbol": "CACHE", "currency": "USD", "fullExchangeName": "Test", "marketState": "REGULAR",
+				"regularMarketPrice": 101.0, "regularMarketTime": asOf.Unix(), "previousClose": 100.0,
+				"fiftyTwoWeekHigh": 110.0, "fiftyTwoWeekLow": 80.0,
+			},
+			"timestamp": []int64{asOf.AddDate(0, 0, -1).Unix(), asOf.Unix()},
+			"indicators": map[string]any{"quote": []any{map[string]any{
+				"close": []float64{100, 101}, "high": []float64{102, 103}, "low": []float64{98, 99}, "volume": []float64{1000, 1200},
+			}}},
+		}},
+		"error": nil,
+	}}
+	historyPayload := map[string]any{"chart": map[string]any{
+		"result": []any{map[string]any{
+			"meta": map[string]any{"symbol": "CACHE", "regularMarketTime": asOf.Unix()},
+			"timestamp": []int64{
+				asOf.AddDate(0, -2, 0).Unix(), asOf.AddDate(0, -1, 0).Unix(), asOf.AddDate(0, 0, -1).Unix(),
+			},
+			"indicators": map[string]any{
+				"quote": []any{map[string]any{
+					"close": []float64{90, 95, 100}, "high": []float64{91, 96, 102}, "low": []float64{89, 94, 98}, "volume": []float64{800, 900, 1000},
+				}},
+				"adjclose": []any{map[string]any{"adjclose": []float64{89, 94, 100}}},
+			},
+		}},
+		"error": nil,
+	}}
+	return currentPayload, historyPayload
+}
+
+func clearYahooHistoryCacheForProvider(provider *YahooMarket) {
+	yahooHistoryCache.Lock()
+	defer yahooHistoryCache.Unlock()
+	for key := range yahooHistoryCache.entries {
+		if key.provider == provider {
+			delete(yahooHistoryCache.entries, key)
+		}
+	}
+	for key := range yahooHistoryCache.calls {
+		if key.provider == provider {
+			delete(yahooHistoryCache.calls, key)
+		}
+	}
+}
+
+func TestYahooMonthlyStatisticSnapshotsArePointInTimeAndMonthly(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 18, 0, 0, 0, time.UTC)
+	rows := make([]quoteObservation, 0, 2000)
+	close := 100.0
+	for date := time.Date(2019, time.January, 1, 16, 0, 0, 0, time.UTC); !date.After(asOf); date = date.AddDate(0, 0, 1) {
+		if date.Weekday() == time.Saturday || date.Weekday() == time.Sunday {
+			continue
+		}
+		close += 0.05
+		volume := 1_000_000 + float64(len(rows))
+		rows = append(rows, quoteObservation{date: date, close: close, adjustedClose: close, high: close + 1, low: close - 1, volume: liveFloat(volume)})
+	}
+	result := yahooQuoteResult{}
+	result.Events.Dividends = make(map[string]yahooDividendEvent)
+	for year := 2019; year <= asOf.Year(); year++ {
+		for _, month := range []time.Month{time.February, time.May, time.August, time.November} {
+			date := time.Date(year, month, 15, 16, 0, 0, 0, time.UTC)
+			if date.After(asOf) {
+				continue
+			}
+			key := fmt.Sprintf("%d-%02d", year, month)
+			result.Events.Dividends[key] = yahooDividendEvent{Amount: 0.25, Date: date.Unix()}
+		}
+	}
+	result.Events.Splits = map[string]yahooSplitEvent{
+		"split": {Date: time.Date(2020, time.August, 31, 16, 0, 0, 0, time.UTC).Unix(), Numerator: 4, Denominator: 1, SplitRatio: "4:1"},
+	}
+
+	snapshots := yahooMonthlyStatisticSnapshots(result, rows, "REGULAR", asOf)
+	completed := completedDailyObservations(rows, "REGULAR", asOf)
+	expectedByMonth := make(map[string]quoteObservation)
+	for _, row := range completed {
+		expectedByMonth[row.date.Format("2006-01")] = row
+	}
+	if len(snapshots) != len(expectedByMonth) {
+		t.Fatalf("monthly snapshots = %d, want %d", len(snapshots), len(expectedByMonth))
+	}
+	seen := make(map[string]bool)
+	for _, snapshot := range snapshots {
+		observed, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		month := observed.Format("2006-01")
+		if seen[month] {
+			t.Fatalf("duplicate month %s: %+v", month, snapshots)
+		}
+		seen[month] = true
+		if want := expectedByMonth[month].date.Format(time.RFC3339); snapshot.AsOf != want {
+			t.Fatalf("month %s asOf = %s, want last completed session %s", month, snapshot.AsOf, want)
+		}
+	}
+	first := snapshots[0]
+	if _, ok := first.Numeric["change-52-week"]; ok {
+		t.Fatalf("range-boundary month must not claim a full 52-week calculation: %+v", first)
+	}
+	if _, ok := first.Numeric["moving-average-200d"]; ok {
+		t.Fatalf("range-boundary month must not claim a 200-session average: %+v", first)
+	}
+	last := snapshots[len(snapshots)-1]
+	for _, key := range []string{"price", "previous-close", "change", "change-percent", "change-52-week", "high-52-week", "low-52-week", "moving-average-50d", "moving-average-200d", "average-volume-10d", "average-volume-3m", "trailing-dividend-rate", "trailing-dividend-yield", "forward-dividend-rate", "forward-dividend-yield", "average-dividend-yield-5y"} {
+		if _, ok := last.Numeric[key]; !ok {
+			t.Fatalf("last monthly snapshot missing %q: %+v", key, last)
+		}
+	}
+	if last.Text["ex-dividend-date"] != "2026-05-15" || last.Text["last-split-factor"] != "4:1" || last.Text["last-split-date"] != "2020-08-31" {
+		t.Fatalf("event state was not point-in-time: %+v", last.Text)
+	}
+	if last.AsOfSource != yahooBackfillAsOfSource || last.Sources["price"] != yahooDailyCloseSource {
+		t.Fatalf("backfill provenance missing: %+v", last)
+	}
+	for _, forbidden := range []string{"market-cap", "enterprise-value", "shares-outstanding"} {
+		if _, ok := last.Numeric[forbidden]; ok {
+			t.Fatalf("historical Yahoo snapshot must not contain SEC-share field %q: %+v", forbidden, last)
+		}
+	}
+}
+
+func TestYahooLiveQuoteNeverUsesRangeBoundaryAsPreviousClose(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 15, 30, 0, 0, time.UTC)
+	price, boundary, close := 200.0, 25.0, 199.0
+	result := yahooQuoteResult{Timestamps: []int64{asOf.Unix()}}
+	result.Meta.RegularMarketPrice = &price
+	result.Meta.RegularMarketTime = asOf.Unix()
+	result.Meta.ChartPreviousClose = &boundary
+	result.Meta.MarketState = "REGULAR"
+	result.Indicators.Quote = append(result.Indicators.Quote, struct {
+		Close  []*float64 `json:"close"`
+		High   []*float64 `json:"high"`
+		Low    []*float64 `json:"low"`
+		Volume []*float64 `json:"volume"`
+	}{Close: []*float64{&close}})
+	quote, err := buildYahooLiveQuote("AAPL", result, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.PreviousClose != nil || quote.Change != nil || quote.ChangePercent != nil {
+		t.Fatalf("10-year range boundary must not become daily previous close: %+v", quote)
+	}
+}
+
+func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
+	market := &fakeMarketProvider{quote: model.LiveQuote{Price: floatPtr(200), MarketCapB: floatPtr(9999)}}
+	pipeline := &Pipeline{Market: market}
+	equity := &model.Equity{
+		Current:   model.CurrentMetrics{SharesOutstandingB: floatPtr(15), SharesOutstandingAsOf: "2026-06-27"},
+		Valuation: model.ValuationMetrics{NetDebtB: floatPtr(50)},
+	}
+	quote, err := pipeline.Quote(context.Background(), "aapl", equity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLiveFloat(t, "shares outstanding", quote.SharesOutstandingB, 15)
+	assertLiveFloat(t, "market cap", quote.MarketCapB, 3000)
+	assertLiveFloat(t, "enterprise value", quote.EnterpriseValueB, 3050)
+	if quote.ShareBasisAsOf != "2026-06-27" {
+		t.Fatalf("unexpected share basis: %+v", quote)
+	}
+
+	withoutExactShares, err := pipeline.Quote(context.Background(), "AAPL", &model.Equity{Valuation: model.ValuationMetrics{NetDebtB: floatPtr(50)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutExactShares.MarketCapB != nil || withoutExactShares.EnterpriseValueB != nil || withoutExactShares.SharesOutstandingB != nil {
+		t.Fatalf("market value must be absent without exact SEC shares: %+v", withoutExactShares)
+	}
+}
+
+func TestAlignedMonthlyBetaUsesFiveYearsOfAdjustedReturns(t *testing.T) {
+	target := make(map[string]float64)
+	benchmark := make(map[string]float64)
+	date := time.Date(2021, time.January, 1, 0, 0, 0, 0, time.UTC)
+	targetPrice, benchmarkPrice := 100.0, 100.0
+	target[date.Format("2006-01")] = targetPrice
+	benchmark[date.Format("2006-01")] = benchmarkPrice
+	for index := 1; index <= 60; index++ {
+		marketReturn := 0.01
+		if index%3 == 0 {
+			marketReturn = -0.006
+		}
+		benchmarkPrice *= 1 + marketReturn
+		targetPrice *= 1 + 2*marketReturn
+		month := date.AddDate(0, index, 0).Format("2006-01")
+		target[month] = targetPrice
+		benchmark[month] = benchmarkPrice
+	}
+	beta := alignedMonthlyBeta(target, benchmark)
+	assertLiveFloat(t, "five-year monthly beta", beta, 2)
+	delete(benchmark, date.AddDate(0, 42, 0).Format("2006-01"))
+	if beta := alignedMonthlyBeta(target, benchmark); beta != nil {
+		t.Fatalf("gapped monthly history should not produce beta: %v", *beta)
 	}
 }
 
@@ -76,13 +514,26 @@ func TestPipelineRequiresMarketDataForMarketOnlyInstrument(t *testing.T) {
 }
 
 type fakeMarketProvider struct {
-	rows   []model.PricePoint
-	source string
-	err    error
-	called bool
+	rows     []model.PricePoint
+	source   string
+	err      error
+	called   bool
+	quote    model.LiveQuote
+	quoteErr error
 }
 
 func (f *fakeMarketProvider) History(context.Context, string, time.Time, time.Time) ([]model.PricePoint, string, error) {
 	f.called = true
 	return f.rows, f.source, f.err
+}
+
+func (f *fakeMarketProvider) Quote(context.Context, string) (model.LiveQuote, error) {
+	return f.quote, f.quoteErr
+}
+
+func assertLiveFloat(t *testing.T, label string, actual *float64, expected float64) {
+	t.Helper()
+	if actual == nil || math.Abs(*actual-expected) > 1e-9 {
+		t.Fatalf("%s = %v, want %v", label, actual, expected)
+	}
 }

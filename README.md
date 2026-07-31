@@ -6,6 +6,8 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`, w
 
 - SEC Company Facts supplies annual and quarterly statements. Every normalized quarter retains its accession, filing date, form, and SEC filing link; Q4 flow values are derived from the 10-K less Q1-Q3.
 - Yahoo Finance monthly closes provide split-adjusted long-history coverage.
+- The ticker statistics workspace maps all 60 Yahoo key-statistics rows into a searchable catalog. Current trading fields come from a timestamped Yahoo chart snapshot; issuer fundamentals and the actual basic-share basis come from SEC Company Facts. Market cap is calculated as snapshot price × latest disclosed shares, with both timestamps shown, and enterprise value is explicitly labeled as a market/filing hybrid.
+- Quote-derived values seed one completed-session snapshot per historical month from the existing ten-year chart payload, then retain bounded daily live snapshots. Moving-average, volume, dividend, price, and split histories are immediately available; beta and exact current market-value fields accumulate only from live observations because their benchmark and SEC share basis are not reconstructed. Filing-derived monthly series are point-in-time: a new filing is not used before its filed date.
 - ThetaData v3 EOD is retained as a market-data fallback when `THETA_BASE_URL` is configured. The macro options view also uses bounded, sequential ThetaData IV-history requests for selected US underlyings outside a conservative US market-hours window.
 - Polygon resolves ticker CIKs when the SEC ticker map is unavailable and supplies adjusted daily bars when configured.
 - FRED supplies the US macro archive plus normalized monetary histories for the United States, euro area, United Kingdom, Japan, and China. Eurostat and the ECB overlay current euro-area inflation, production, unemployment, and M3; ONS overlays current UK CPI, production, and unemployment. Country metrics retain independent observation dates, and stale or unavailable fields are explicitly warned.
@@ -14,7 +16,7 @@ Chart-first equity fundamentals and valuation workspace served at `/equities`, w
 - JSON state persists at `DATA_FILE`; Kubernetes mounts this file on a PVC.
 - New tickers are analyzed asynchronously. Existing tickers refresh on `REFRESH_INTERVAL` and through the cluster CronJob.
 
-The landing view charts indexed market performance, all eight valuation measures, and thirteen operating-quality measures on filing-date timelines with synchronized macro panels. Every equities time-series chart supports drag selection, period reset, legend filtering where multiple series are present, and selected-window y-axis fitting. Isolated extreme points are clipped from the fitted axis only when adjacent observations return to the normal range; the raw point remains available in the series. The comparison response omits quarterly filing arrays and reduces monthly prices to quarter-end snapshots. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and full monthly market history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
+The landing view charts indexed market performance, all eight valuation measures, and thirteen operating-quality measures on filing-date timelines with synchronized macro panels. Each ticker opens a same-page statistics explorer with search, pinned metrics, current provenance, month/quarter/year and range controls, chart/table/split views, event timelines, and URL-addressable selections. Metrics that require an unconfigured ownership, short-interest, estimates, or vendor-methodology feed remain visible with the exact source gap instead of a fabricated value. Every equities time-series chart supports drag selection, period reset, legend filtering where multiple series are present, and selected-window y-axis fitting. Isolated extreme points are clipped from the fitted axis only when adjacent observations return to the normal range; the raw point remains available in the series. The comparison response omits quarterly filing arrays, quote history, and reduces monthly prices to quarter-end snapshots. `GET /equities/api/tickers/{ticker}` returns the persisted filing archive and full monthly market history; `GET /equities/api/tickers/{ticker}/quote` returns the short-cached current snapshot and recorded quote-stat history. Calculation definitions and forward assumptions are documented in [docs/valuation-methodology.md](docs/valuation-methodology.md).
 
 ## Local run
 
@@ -42,6 +44,7 @@ The macro workspace is available at `http://localhost:8080/macro/`. It combines 
 | `ALFRED_ENABLED` | `true` | Enable incremental point-in-time US regime vintages |
 | `OFFICIAL_COUNTRY_DATA_ENABLED` | `true` | Enable Eurostat, ECB, and ONS country overlays |
 | `POLYGON_API_KEY` | empty | Market-data fallback |
+| `STARTUP_REFRESH` | `false` | Queue a full ticker and macro refresh shortly after process startup; production enables this so schema-dependent fields are backfilled after rollout |
 | `REFRESH_INTERVAL` | `24h` | In-process refresh cadence |
 | `REFRESH_TOKEN` | empty | Bearer token for `/internal/refresh` |
 | `MAX_TICKERS` | `30` | Watchlist limit |
@@ -53,4 +56,4 @@ make test
 docker build -t parallel-ocean-equities:local .
 ```
 
-The production image listens on port `8080`; readiness is available at `/healthz` and Prometheus metrics at `/metrics`.
+The production image listens on port `8080`; readiness is available at `/healthz` and Prometheus metrics at `/metrics`. The deployment workflow enforces `STARTUP_REFRESH=true` and does not succeed until every persisted ticker has completed its startup SEC/market refresh with zero failures. This refresh upgrades older PVC state with newly extracted fields, including exact SEC actual-share disclosures where the issuer reports them; unsupported disclosures remain explicitly unavailable.

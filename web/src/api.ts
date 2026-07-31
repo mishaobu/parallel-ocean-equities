@@ -1,4 +1,4 @@
-import type { Equity, StateResponse } from "./types";
+import type { Equity, LiveQuote, StateResponse } from "./types";
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -21,6 +21,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   state: () => request<StateResponse>("/state"),
   equity: (ticker: string) => request<Equity>(`/tickers/${encodeURIComponent(ticker)}`),
+	quote: (ticker: string, includeHistory = true) => request<LiveQuote>(`/tickers/${encodeURIComponent(ticker)}/quote${includeHistory ? "" : "?history=0"}`),
 	previewTicker: (ticker: string) => request<{ ticker: string; company: string; instrumentType: string; cik?: string; source: string }>(`/tickers/${encodeURIComponent(ticker)}/preview`),
   addTicker: (ticker: string) => request<{ ticker: string; status: string }>("/tickers", {
     method: "POST",

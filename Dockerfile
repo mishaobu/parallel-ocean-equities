@@ -35,7 +35,8 @@ COPY --from=web /src/web/dist /app/web
 COPY --from=monetary /src/monetary/dist /app/monetary
 COPY --from=macro /src/macro/dist /app/macro
 COPY data/seed.json /app/data/seed.json
-RUN mkdir /data && chown -R equities:equities /data /app
+COPY scripts/verify-startup-refresh.sh /app/verify-startup-refresh
+RUN chmod 0555 /app/verify-startup-refresh && mkdir /data && chown -R equities:equities /data /app
 USER 10001:10001
 EXPOSE 8080
 ENV PORT=8080 BASE_PATH=/equities STATIC_DIR=/app/web MONETARY_PATH=/monetary MONETARY_STATIC_DIR=/app/monetary MACRO_PATH=/macro MACRO_STATIC_DIR=/app/macro DATA_FILE=/data/state.json SEED_FILE=/app/data/seed.json

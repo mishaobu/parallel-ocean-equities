@@ -27,6 +27,7 @@ type EquityService interface {
 	Stats() analysis.Stats
 	AddTicker(string) error
 	PreviewTicker(context.Context, string) (analysis.TickerPreview, error)
+	Quote(context.Context, string) (model.LiveQuote, error)
 	DeleteTicker(string) error
 	Queue(string) bool
 	RefreshAll() int
@@ -89,6 +90,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET "+base+"/api/state", s.handleState)
 	s.mux.HandleFunc("POST "+base+"/api/tickers", s.handleAddTicker)
 	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}/preview", s.handlePreviewTicker)
+	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}/quote", s.handleQuote)
 	s.mux.HandleFunc("GET "+base+"/api/tickers/{ticker}", s.handleTicker)
 	s.mux.HandleFunc("DELETE "+base+"/api/tickers/{ticker}", s.handleDeleteTicker)
 	s.mux.HandleFunc("POST "+base+"/api/tickers/{ticker}/refresh", s.handleRefreshTicker)
@@ -129,6 +131,30 @@ func (s *Server) handlePreviewTicker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, preview)
 }
 
+func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
+	quote, err := s.service.Quote(r.Context(), r.PathValue("ticker"))
+	if err != nil {
+		status := http.StatusBadGateway
+		switch {
+		case errors.Is(err, analysis.ErrInvalidTicker):
+			status = http.StatusBadRequest
+		case errors.Is(err, store.ErrNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			status = http.StatusGatewayTimeout
+		case errors.Is(err, analysis.ErrNoQuoteProvider):
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	if r.URL.Query().Get("history") == "0" {
+		quote.History = nil
+	}
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	writeJSON(w, http.StatusOK, quote)
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	state := s.service.Snapshot()
 	ready := len(state.Tickers) > 0
@@ -147,6 +173,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	state := s.service.Snapshot()
 	for _, equity := range state.Tickers {
 		equity.Quarterlies = nil
+		equity.QuoteHistory = nil
 		equity.Prices = compactPrices(equity.Prices)
 	}
 	state.Macro = compactMacro(state.Macro)

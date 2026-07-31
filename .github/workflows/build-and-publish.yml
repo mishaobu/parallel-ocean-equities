@@ -101,11 +101,16 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Roll AKS deployment
+      - name: Roll, refresh, and verify AKS deployment
         env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TAG: ${{ needs.image.outputs.tag }}
         run: |
-          az aks command invoke \
+          result="$(az aks command invoke \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
             --resource-group staging-rg \
             --name staging-aks-cluster \
-            --command "kubectl -n equities set image deploy/parallel-ocean-equities equities=${REGISTRY}/${IMAGE}:${TAG} && kubectl -n equities rollout status deploy/parallel-ocean-equities --timeout=4m"
+            --output json \
+            --command "kubectl -n equities set env deploy/parallel-ocean-equities STARTUP_REFRESH=true && kubectl -n equities set image deploy/parallel-ocean-equities equities=${REGISTRY}/${IMAGE}:${TAG} && kubectl -n equities rollout status deploy/parallel-ocean-equities --timeout=4m && kubectl -n equities exec deploy/parallel-ocean-equities -c equities -- /app/verify-startup-refresh")"
+          printf '%s\n' "$result" | jq -r '.logs'
+          test "$(printf '%s\n' "$result" | jq -r '.exitCode')" = "0"

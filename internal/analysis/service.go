@@ -16,6 +16,8 @@ import (
 
 var tickerPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,9}$`)
 
+var ErrInvalidTicker = errors.New("ticker must be 1-10 letters, numbers, dots, or hyphens")
+
 type Analyzer interface {
 	Analyze(context.Context, string, *model.Equity) (*model.Equity, error)
 }
@@ -43,12 +45,27 @@ type Stats struct {
 	MacroFailures    int64     `json:"macroFailures"`
 }
 
+type cachedQuote struct {
+	quote    model.LiveQuote
+	cachedAt time.Time
+}
+
+type quoteCall struct {
+	done  chan struct{}
+	quote model.LiveQuote
+	err   error
+}
+
 type Service struct {
-	store      *store.Store
-	analyzer   Analyzer
-	queue      chan string
-	macro      MacroAnalyzer
-	macroQueue chan struct{}
+	store            *store.Store
+	analyzer         Analyzer
+	queue            chan string
+	macro            MacroAnalyzer
+	macroQueue       chan struct{}
+	quoteTTL         time.Duration
+	quoteCache       map[string]cachedQuote
+	quoteCalls       map[string]*quoteCall
+	quotePersistedAt map[string]time.Time
 
 	mu            sync.Mutex
 	inflight      map[string]struct{}
@@ -62,16 +79,31 @@ type Service struct {
 
 func NewService(state *store.Store, analyzer Analyzer) *Service {
 	return &Service{
-		store:      state,
-		analyzer:   analyzer,
-		queue:      make(chan string, 64),
-		macroQueue: make(chan struct{}, 1),
-		inflight:   make(map[string]struct{}),
+		store:            state,
+		analyzer:         analyzer,
+		queue:            make(chan string, 64),
+		macroQueue:       make(chan struct{}, 1),
+		quoteTTL:         time.Minute,
+		quoteCache:       make(map[string]cachedQuote),
+		quoteCalls:       make(map[string]*quoteCall),
+		quotePersistedAt: make(map[string]time.Time),
+		inflight:         make(map[string]struct{}),
 	}
 }
 
 func (s *Service) WithMacro(analyzer MacroAnalyzer) *Service {
 	s.macro = analyzer
+	return s
+}
+
+// WithQuoteTTL primarily supports deployments that need a different quote
+// cadence and deterministic cache tests. A non-positive duration disables the
+// cache without disabling quote retrieval.
+func (s *Service) WithQuoteTTL(ttl time.Duration) *Service {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quoteTTL = ttl
+	s.quoteCache = make(map[string]cachedQuote)
 	return s
 }
 
@@ -90,7 +122,7 @@ func (s *Service) Start(ctx context.Context, workers int) {
 func (s *Service) AddTicker(ticker string) error {
 	ticker = strings.ToUpper(strings.TrimSpace(ticker))
 	if !tickerPattern.MatchString(ticker) {
-		return errors.New("ticker must be 1-10 letters, numbers, dots, or hyphens")
+		return ErrInvalidTicker
 	}
 	if err := s.store.Add(ticker); err != nil {
 		return err
@@ -104,7 +136,7 @@ func (s *Service) AddTicker(ticker string) error {
 func (s *Service) PreviewTicker(ctx context.Context, ticker string) (TickerPreview, error) {
 	ticker = strings.ToUpper(strings.TrimSpace(ticker))
 	if !tickerPattern.MatchString(ticker) {
-		return TickerPreview{}, errors.New("ticker must be 1-10 letters, numbers, dots, or hyphens")
+		return TickerPreview{}, ErrInvalidTicker
 	}
 	previewer, ok := s.analyzer.(TickerPreviewer)
 	if !ok {
@@ -114,7 +146,125 @@ func (s *Service) PreviewTicker(ctx context.Context, ticker string) (TickerPrevi
 }
 
 func (s *Service) DeleteTicker(ticker string) error {
-	return s.store.Delete(strings.ToUpper(strings.TrimSpace(ticker)))
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if err := s.store.Delete(ticker); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.quoteCache, ticker)
+	delete(s.quotePersistedAt, ticker)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) Quote(ctx context.Context, ticker string) (model.LiveQuote, error) {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if !tickerPattern.MatchString(ticker) {
+		return model.LiveQuote{}, ErrInvalidTicker
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	if cached, ok := s.quoteCache[ticker]; ok && s.quoteTTL > 0 && now.Sub(cached.cachedAt) < s.quoteTTL {
+		s.mu.Unlock()
+		return cached.quote, nil
+	}
+	s.mu.Unlock()
+	existing, err := s.store.Get(ticker)
+	if err != nil {
+		return model.LiveQuote{}, err
+	}
+
+	quoter, ok := s.analyzer.(QuoteAnalyzer)
+	if !ok {
+		return model.LiveQuote{}, ErrNoQuoteProvider
+	}
+	s.mu.Lock()
+	// A prior request may have populated the cache while this caller cloned the
+	// persisted equity. Recheck under the same lock used to register calls.
+	now = time.Now().UTC()
+	if cached, ok := s.quoteCache[ticker]; ok && s.quoteTTL > 0 && now.Sub(cached.cachedAt) < s.quoteTTL {
+		s.mu.Unlock()
+		return cached.quote, nil
+	}
+	if call, ok := s.quoteCalls[ticker]; ok {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return model.LiveQuote{}, ctx.Err()
+		case <-call.done:
+			return call.quote, call.err
+		}
+	}
+	call := &quoteCall{done: make(chan struct{})}
+	s.quoteCalls[ticker] = call
+	s.mu.Unlock()
+
+	go s.executeQuoteCall(ticker, call, quoter, existing)
+	select {
+	case <-ctx.Done():
+		return model.LiveQuote{}, ctx.Err()
+	case <-call.done:
+		return call.quote, call.err
+	}
+}
+
+func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteAnalyzer, existing *model.Equity) {
+	var quote model.LiveQuote
+	var quoteErr error
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			quote = model.LiveQuote{}
+			quoteErr = fmt.Errorf("live quote provider panicked: %v", recovered)
+		}
+		s.finishQuoteCall(ticker, call, quote, quoteErr)
+	}()
+	// The shared request outlives any one HTTP caller. Each waiter still observes
+	// its own context while the provider work is bounded independently.
+	quoteCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	quote, quoteErr = quoter.Quote(quoteCtx, ticker, existing)
+	if quoteErr != nil {
+		return
+	}
+	if s.quotePersistenceDue(ticker, time.Now().UTC()) {
+		history, err := s.store.RecordQuoteSnapshots(ticker, quote.History, model.NewStatisticSnapshot(quote))
+		if err != nil {
+			quote = model.LiveQuote{}
+			quoteErr = fmt.Errorf("persist live quote statistics: %w", err)
+			return
+		}
+		quote.History = history
+		s.markQuotePersisted(ticker, time.Now().UTC())
+	} else {
+		quote.History = existing.QuoteHistory
+	}
+}
+
+const quotePersistenceInterval = 15 * time.Minute
+
+func (s *Service) quotePersistenceDue(ticker string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lastPersisted, ok := s.quotePersistedAt[ticker]
+	return !ok || now.Sub(lastPersisted) >= quotePersistenceInterval
+}
+
+func (s *Service) markQuotePersisted(ticker string, observed time.Time) {
+	s.mu.Lock()
+	s.quotePersistedAt[ticker] = observed
+	s.mu.Unlock()
+}
+
+func (s *Service) finishQuoteCall(ticker string, call *quoteCall, quote model.LiveQuote, quoteErr error) {
+	s.mu.Lock()
+	if quoteErr == nil {
+		s.quoteCache[ticker] = cachedQuote{quote: quote, cachedAt: time.Now().UTC()}
+	}
+	call.quote = quote
+	call.err = quoteErr
+	delete(s.quoteCalls, ticker)
+	close(call.done)
+	s.mu.Unlock()
 }
 
 func (s *Service) Queue(ticker string) bool {
@@ -274,5 +424,9 @@ func (s *Service) refresh(parent context.Context, ticker string) {
 	}
 	if err := s.store.SetResult(ticker, result); err != nil {
 		s.failures.Add(1)
+		return
 	}
+	s.mu.Lock()
+	delete(s.quoteCache, ticker)
+	s.mu.Unlock()
 }

@@ -2,13 +2,12 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, Calculator, Download, GitCompareArrows, Globe2, ImageDown, Landmark, Link2, LoaderCircle, Pin, Plus, RefreshCw, Save, Trash2, TrendingUp, X } from "lucide-react";
 import { api } from "./api";
 import { metricLabels } from "./chartData";
-import { historyDomain, qualityHistoryDomain, returnValue, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
+import { historyDomain, qualityHistoryDomain, valuationHistoryDomain, type HistoryBasis, type HistoryRange } from "./historyData";
 import { AnnualTable } from "./components/AnnualTable";
 import { MacroCharts } from "./components/MacroCharts";
 import { MetricChart } from "./components/MetricChart";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { PriceChart } from "./components/PriceChart";
-import { BalanceSheetChart, QuarterlyChart } from "./components/QuarterlyCharts";
 import { QuarterlyTable } from "./components/QuarterlyTable";
 import { QualityHistoryCharts } from "./components/QualityHistoryCharts";
 import { QualityMatrix } from "./components/QualityMatrix";
@@ -16,8 +15,9 @@ import { TickerRail } from "./components/TickerRail";
 import { ValuationMatrix } from "./components/ValuationMatrix";
 import { ValuationHistoryCharts } from "./components/ValuationHistoryCharts";
 import { ValuationWorkbench } from "./components/ValuationWorkbench";
-import type { Equity, MacroSeries, MetricKey, StateResponse } from "./types";
-import { formatValuation, valuationRows, type ValuationMetricKey } from "./valuationData";
+import { StatisticsExplorer } from "./components/StatisticsExplorer";
+import type { Equity, LiveQuote, MacroSeries, MetricKey, StateResponse } from "./types";
+import { valuationRows, type ValuationMetricKey } from "./valuationData";
 import { qualityRows, type QualityMetricKey } from "./qualityData";
 import { copyCurrentLink, exportEquitiesCSV, exportPrimaryChartPNG } from "./exports";
 
@@ -172,7 +172,7 @@ function App() {
 			</div>
 
           {mode === "compare" && <CompareView equities={equities} metric={metric} onMetric={setMetric} macro={payload?.state.macro} />}
-          {mode === "ticker" && selectedEquity && <TickerView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} onRefresh={refreshTicker} onRemove={removeTicker} />}
+          {mode === "ticker" && selectedEquity && <TickerView equity={selectedEquity} benchmark={details.SPY ?? payload.state.tickers.SPY} loading={loadingDetail === selectedEquity.ticker} onRefresh={refreshTicker} onRemove={removeTicker} />}
           {mode === "models" && selectedEquity && <ModelsView equity={selectedEquity} loading={loadingDetail === selectedEquity.ticker} />}
         </main>
 		</div>}
@@ -277,57 +277,49 @@ function initialDateDomain(): [number, number] | undefined { const query = new U
 function initialParam<T extends string>(key: string, values: T[], fallback: T) { const value = new URLSearchParams(window.location.search).get(key) as T | null; return value && values.includes(value) ? value : fallback; }
 function loadJSON<T>(key: string, fallback: T): T { try { const value = localStorage.getItem(key); return value ? JSON.parse(value) as T : fallback; } catch { return fallback; } }
 
-function TickerView({ equity, loading, onRefresh, onRemove }: { equity: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
-  const peRow = valuationRows[0];
-  const ebitdaRow = valuationRows[1];
-  const fcfRow = valuationRows.find((row) => row.key === "fcf-market-cap") ?? valuationRows[0];
+function TickerView({ equity, benchmark, loading, onRefresh, onRemove }: { equity: Equity; benchmark?: Equity; loading: boolean; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
+  const [quote, setQuote] = useState<LiveQuote>();
+  const [quoteError, setQuoteError] = useState("");
+  useEffect(() => {
+    let active = true;
+    let historyLoaded = false;
+    const update = () => {
+      if (document.visibilityState === "hidden") return;
+      const includeHistory = !historyLoaded;
+      void api.quote(equity.ticker, includeHistory).then((next) => {
+        if (!active) return;
+        setQuote((current) => includeHistory ? next : { ...next, history: current?.history });
+        historyLoaded = true;
+        setQuoteError("");
+      }).catch((requestError) => { if (active) setQuoteError(requestError instanceof Error ? requestError.message : "Live quote unavailable"); });
+    };
+    setQuote(undefined); setQuoteError(""); update();
+    const timer = window.setInterval(update, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [equity.ticker]);
   return (
     <section className="view">
-      <TickerTitle equity={equity} onRefresh={onRefresh} onRemove={onRemove} />
+      <TickerTitle equity={equity} quote={quote} onRefresh={onRefresh} onRemove={onRemove} />
       {equity.status === "error" && <div className="inline-error">{equity.error}</div>}
-      {equity.annuals.length === 0 && equity.prices?.length ? <MarketOnlyView equity={equity} /> : equity.annuals.length === 0 ? <Pending equity={equity} /> : <>
-        <div className="metric-strip">
-          <Metric label="Price" value={money(equity.current.price)} context={equity.current.return1Y === undefined ? "1Y n/a" : `${percent(equity.current.return1Y)} 1Y`} valueTone={tone(equity.current.return1Y)} />
-          <Metric label="P/E" value={formatValuation(equity.valuation?.pe, peRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardPe, peRow.kind)}`} />
-          <Metric label="EV / EBITDA" value={formatValuation(equity.valuation?.evToEbitda, ebitdaRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardEvToEbitda, ebitdaRow.kind)}`} />
-          <Metric label="FCF / market cap" value={formatValuation(equity.valuation?.fcfToMarketCap, fcfRow.kind)} context={`Model ${formatValuation(equity.valuation?.forwardFcfToMarketCap, fcfRow.kind)}`} />
-        </div>
-        {loading && !(equity.quarterlies?.length) ? <PendingDetail ticker={equity.ticker} /> : <>
-          <div className="section-heading"><div><h2>Quarterly trajectories</h2><span>{equity.quarterlies?.length ?? 0} persisted periods</span></div></div>
-          <div className="detail-charts quarterly-charts">
-            <QuarterlyChart equity={equity} metric="revenueB" />
-            <QuarterlyChart equity={equity} metric="ebitdaB" />
-            <QuarterlyChart equity={equity} metric="fcfB" />
-            <QuarterlyChart equity={equity} metric="netDebtB" />
-            <BalanceSheetChart equity={equity} />
+      {quoteError && <div className="quote-fallback">Live market update unavailable; current values fall back to the persisted close.</div>}
+      {equity.annuals.length === 0 && !(equity.prices?.length) ? <Pending equity={equity} /> : <>
+        <StatisticsExplorer equity={equity} quote={quote} benchmark={benchmark} />
+        {loading && !(equity.quarterlies?.length) ? <PendingDetail ticker={equity.ticker} /> : equity.annuals.length > 0 && <details className="statement-archive">
+          <summary><span><strong>Full statements & source records</strong><small>{equity.quarterlies?.length ?? 0} quarters · {equity.annuals.length} fiscal years</small></span><span>Expand</span></summary>
+          <div className="statement-archive-content">
+            <div className="section-heading"><div><h2>Quarterly statements</h2><span>Reported and derived periods with filing links</span></div></div>
+            <QuarterlyTable equity={equity} />
+            <div className="section-heading"><div><h2>Operating quality</h2><span>Trailing twelve months</span></div></div>
+            <QualityMatrix equities={[equity]} />
+            <div className="section-heading"><div><h2>Market and annual history</h2><span>{analysisDate(equity)}</span></div></div>
+            <PriceChart equity={equity} />
+            <AnnualTable equity={equity} />
           </div>
-          <QuarterlyTable equity={equity} />
-          <div className="section-heading"><div><h2>Operating quality</h2><span>Trailing twelve months</span></div></div>
-          <QualityMatrix equities={[equity]} />
-        </>}
-        <div className="section-heading"><div><h2>Market and annual history</h2><span>{analysisDate(equity)}</span></div></div>
-        <PriceChart equity={equity} />
-        <AnnualTable equity={equity} />
+        </details>}
       </>}
       {!!equity.warnings?.length && <div className="warnings">{equity.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}
     </section>
   );
-}
-
-function MarketOnlyView({ equity }: { equity: Equity }) {
-  const latest = equity.prices?.[equity.prices.length - 1];
-  const first = equity.prices?.[0];
-	const totalReturn = first && latest && returnValue(first) > 0 ? returnValue(latest) / returnValue(first) - 1 : undefined;
-  return <>
-    <div className="metric-strip market-metric-strip">
-      <Metric label="Price" value={money(equity.current.price)} context={equity.current.priceAsOf || "latest close"} />
-      <Metric label="1 year" value={percent(equity.current.return1Y)} context="price return" valueTone={tone(equity.current.return1Y)} />
-      <Metric label="52 week high" value={money(equity.current.high52Week)} context={equity.current.low52Week === undefined ? "range unavailable" : `Low ${money(equity.current.low52Week)}`} />
-			<Metric label="Full-history total return" value={percent(totalReturn)} context={first ? `since ${first.date.slice(0, 4)}` : "history pending"} valueTone={tone(totalReturn)} />
-    </div>
-    <div className="section-heading"><div><h2>Market history</h2><span>{equity.prices?.length ?? 0} monthly observations</span></div></div>
-    <PriceChart equity={equity} />
-  </>;
 }
 
 function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
@@ -339,9 +331,14 @@ function ModelsView({ equity, loading }: { equity: Equity; loading: boolean }) {
   );
 }
 
-function TickerTitle({ equity, onRefresh, onRemove }: { equity: Equity; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
+function TickerTitle({ equity, quote, onRefresh, onRemove }: { equity: Equity; quote?: LiveQuote; onRefresh: (ticker: string) => Promise<void>; onRemove: (ticker: string) => Promise<void> }) {
   return <div className="view-title ticker-title">
     <div><h1>{equity.ticker} <span>{equity.company}</span></h1><small>{equity.instrumentType ? `${equity.instrumentType} · ` : ""}{equity.sources?.join(" + ") || "Analysis pending"} · {analysisDate(equity)}</small></div>
+    <div className="ticker-live-quote">
+      <strong>{formatQuotePrice(quote?.price ?? equity.current.price, quote?.currency)}</strong>
+      {quote?.changePercent !== undefined && <span className={quote.changePercent > 0 ? "positive" : quote.changePercent < 0 ? "negative" : ""}>{quote.changePercent > 0 ? "+" : ""}{(quote.changePercent * 100).toFixed(2)}%</span>}
+      <small>{quote?.marketState || (quote ? "Market snapshot" : "Persisted close")}</small>
+    </div>
     <div className="icon-actions">
       <button type="button" onClick={() => void onRefresh(equity.ticker)} disabled={equity.status === "refreshing"} aria-label={`Refresh ${equity.ticker}`} title="Refresh analysis"><RefreshCw size={17} className={equity.status === "refreshing" ? "spin" : ""} /></button>
       <button type="button" onClick={() => void onRemove(equity.ticker)} aria-label={`Remove ${equity.ticker}`} title="Remove ticker"><Trash2 size={17} /></button>
@@ -360,16 +357,15 @@ function PendingDetail({ ticker }: { ticker: string }) {
   return <div className="analysis-pending"><LoaderCircle className="spin" size={20} /><div><strong>Loading quarterly archive</strong><span>{ticker}</span></div></div>;
 }
 
-function Metric({ label, value, context, valueTone = "" }: { label: string; value: string; context: string; valueTone?: string }) {
-  return <div className="metric-block"><span>{label}</span><strong className={valueTone}>{value}</strong><small>{context}</small></div>;
-}
-
-function money(value?: number) { return value === undefined ? "n/a" : `$${value.toFixed(2)}`; }
-function percent(value?: number) { return value === undefined ? "n/a" : `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`; }
-function tone(value?: number) { return value === undefined ? "" : value > 0 ? "positive" : value < 0 ? "negative" : ""; }
 function analysisDate(equity: Equity) {
   const value = equity.current.priceAsOf || equity.updatedAt?.slice(0, 10);
   return !value || value.startsWith("0001-") ? "queued" : value;
+}
+
+function formatQuotePrice(value?: number, currency = "USD") {
+  if (value === undefined) return "—";
+  try { return value.toLocaleString("en-US", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 4 }); }
+  catch { return `${value.toLocaleString("en-US", { maximumFractionDigits: 4 })} ${currency}`; }
 }
 function timeAgo(value?: string) {
   if (!value) return "pending";

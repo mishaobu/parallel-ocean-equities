@@ -149,6 +149,12 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 		Prices:      existing.Prices,
 		Warnings:    warnings,
 	}
+	result.Current.SharesOutstandingB = nil
+	result.Current.SharesOutstandingAsOf = ""
+	if shares, ok := latestActualSharesOutstanding(facts); ok {
+		result.Current.SharesOutstandingB = floatPtr(shares.Val / 1e9)
+		result.Current.SharesOutstandingAsOf = shares.End
+	}
 	if result.Company == "" {
 		result.Company = company.Title
 	}
@@ -161,6 +167,59 @@ func (c *SECClient) Analyze(ctx context.Context, ticker string, existing *model.
 		}
 	}
 	return result, nil
+}
+
+func latestActualSharesOutstanding(response companyFacts) (fact, bool) {
+	dei := response.Facts["dei"]
+	concept, ok := dei["EntityCommonStockSharesOutstanding"]
+	if !ok {
+		return fact{}, false
+	}
+
+	latest := fact{}
+	found := false
+	for _, candidate := range concept.Units["shares"] {
+		if !validActualSharesOutstandingFact(candidate) {
+			continue
+		}
+		if !found || candidate.End > latest.End || (candidate.End == latest.End && candidate.Filed > latest.Filed) {
+			latest = candidate
+			found = true
+		}
+	}
+	return latest, found
+}
+
+func actualSharesOutstandingByAccession(response companyFacts) map[string]fact {
+	dei := response.Facts["dei"]
+	concept, ok := dei["EntityCommonStockSharesOutstanding"]
+	if !ok {
+		return nil
+	}
+
+	byAccession := make(map[string]fact)
+	for _, candidate := range concept.Units["shares"] {
+		if candidate.Accn == "" || !validActualSharesOutstandingFact(candidate) {
+			continue
+		}
+		current, exists := byAccession[candidate.Accn]
+		if !exists || candidate.End > current.End || (candidate.End == current.End && candidate.Filed > current.Filed) {
+			byAccession[candidate.Accn] = candidate
+		}
+	}
+	return byAccession
+}
+
+func validActualSharesOutstandingFact(candidate fact) bool {
+	if candidate.Start != "" || candidate.End == "" || candidate.Val <= 0 {
+		return false
+	}
+	if candidate.Form != "10-Q" && candidate.Form != "10-Q/A" && candidate.Form != "10-K" && candidate.Form != "10-K/A" {
+		return false
+	}
+	end, endErr := time.Parse("2006-01-02", candidate.End)
+	filed, filedErr := time.Parse("2006-01-02", candidate.Filed)
+	return endErr == nil && filedErr == nil && !end.After(filed)
 }
 
 func mergeAnnualHistory(groups ...[]model.AnnualPoint) []model.AnnualPoint {
@@ -342,7 +401,9 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 	noncurrentDebt := annualInstantFacts(gaap, noncurrentDebtTags, "USD")
 	totalDebt := annualInstantFacts(gaap, totalDebtTags, "USD")
 	assets := annualInstantFacts(gaap, assetTags, "USD")
+	currentAssets := annualInstantFacts(gaap, currentAssetTags, "USD")
 	liabilities := annualInstantFacts(gaap, liabilityTags, "USD")
+	currentLiabilities := annualInstantFacts(gaap, currentLiabilityTags, "USD")
 	equity := annualInstantFacts(gaap, equityTags, "USD")
 	inventory := annualInstantFacts(gaap, inventoryTags, "USD")
 	receivables := annualInstantFacts(gaap, receivableTags, "USD")
@@ -354,6 +415,7 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 	if len(anchors) == 0 {
 		return nil, errors.New("no annual SEC revenue or net-income facts found")
 	}
+	actualShares := actualSharesOutstandingByAccession(response)
 
 	rows := make([]model.AnnualPoint, 0, len(anchors))
 	for period, anchor := range anchors {
@@ -419,6 +481,10 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		if value, ok := shares[period]; ok {
 			row.DilutedSharesB = floatPtr(value.Val / 1e9)
 		}
+		if value, ok := actualShares[anchor.Accn]; ok {
+			row.SharesOutstandingB = floatPtr(value.Val / 1e9)
+			row.SharesOutstandingAsOf = value.End
+		}
 		if value, ok := cash[anchor.End]; ok {
 			row.CashB = floatPtr(value.Val / 1e9)
 		}
@@ -442,8 +508,14 @@ func extractAnnuals(response companyFacts) ([]model.AnnualPoint, error) {
 		if value, ok := assets[anchor.End]; ok {
 			row.AssetsB = floatPtr(value.Val / 1e9)
 		}
+		if value, ok := currentAssets[anchor.End]; ok {
+			row.CurrentAssetsB = floatPtr(value.Val / 1e9)
+		}
 		if value, ok := liabilities[anchor.End]; ok {
 			row.LiabilitiesB = floatPtr(value.Val / 1e9)
+		}
+		if value, ok := currentLiabilities[anchor.End]; ok {
+			row.CurrentLiabilitiesB = floatPtr(value.Val / 1e9)
 		}
 		if value, ok := equity[anchor.End]; ok {
 			row.EquityB = floatPtr(value.Val / 1e9)
