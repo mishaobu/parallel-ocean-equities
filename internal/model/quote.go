@@ -1,42 +1,51 @@
 package model
 
+import "maps"
+
 // LiveQuote is a short-lived market snapshot. Market-value fields are only
 // populated when the quote can be paired with actual SEC shares outstanding.
 type LiveQuote struct {
-	Ticker                      string              `json:"ticker"`
-	Price                       *float64            `json:"price,omitempty"`
-	PreviousClose               *float64            `json:"previousClose,omitempty"`
-	Change                      *float64            `json:"change,omitempty"`
-	ChangePercent               *float64            `json:"changePercent,omitempty"`
-	AsOf                        string              `json:"asOf,omitempty"`
-	MarketState                 string              `json:"marketState,omitempty"`
-	Currency                    string              `json:"currency,omitempty"`
-	Exchange                    string              `json:"exchange,omitempty"`
-	Source                      string              `json:"source,omitempty"`
-	FieldSources                map[string]string   `json:"fieldSources,omitempty"`
-	Beta5YMonthly               *float64            `json:"beta5YMonthly,omitempty"`
-	BetaBenchmark               string              `json:"betaBenchmark,omitempty"`
-	Change52Week                *float64            `json:"change52Week,omitempty"`
-	High52Week                  *float64            `json:"high52Week,omitempty"`
-	Low52Week                   *float64            `json:"low52Week,omitempty"`
-	MovingAverage50Day          *float64            `json:"movingAverage50Day,omitempty"`
-	MovingAverage200Day         *float64            `json:"movingAverage200Day,omitempty"`
-	AverageVolume3Month         *float64            `json:"averageVolume3Month,omitempty"`
-	AverageVolume10Day          *float64            `json:"averageVolume10Day,omitempty"`
-	TrailingAnnualDividendRate  *float64            `json:"trailingAnnualDividendRate,omitempty"`
-	TrailingAnnualDividendYield *float64            `json:"trailingAnnualDividendYield,omitempty"`
-	ForwardAnnualDividendRate   *float64            `json:"forwardAnnualDividendRate,omitempty"`
-	ForwardAnnualDividendYield  *float64            `json:"forwardAnnualDividendYield,omitempty"`
-	AverageDividendYield5Year   *float64            `json:"averageDividendYield5Year,omitempty"`
-	ExDividendDate              string              `json:"exDividendDate,omitempty"`
-	LastDividendDate            string              `json:"lastDividendDate,omitempty"`
-	LastSplitFactor             string              `json:"lastSplitFactor,omitempty"`
-	LastSplitDate               string              `json:"lastSplitDate,omitempty"`
-	MarketCapB                  *float64            `json:"marketCapB,omitempty"`
-	EnterpriseValueB            *float64            `json:"enterpriseValueB,omitempty"`
-	SharesOutstandingB          *float64            `json:"sharesOutstandingB,omitempty"`
-	ShareBasisAsOf              string              `json:"shareBasisAsOf,omitempty"`
-	History                     []StatisticSnapshot `json:"history,omitempty"`
+	Ticker                      string            `json:"ticker"`
+	Price                       *float64          `json:"price,omitempty"`
+	PreviousClose               *float64          `json:"previousClose,omitempty"`
+	Change                      *float64          `json:"change,omitempty"`
+	ChangePercent               *float64          `json:"changePercent,omitempty"`
+	AsOf                        string            `json:"asOf,omitempty"`
+	MarketState                 string            `json:"marketState,omitempty"`
+	Currency                    string            `json:"currency,omitempty"`
+	Exchange                    string            `json:"exchange,omitempty"`
+	Source                      string            `json:"source,omitempty"`
+	FieldSources                map[string]string `json:"fieldSources,omitempty"`
+	Beta5YMonthly               *float64          `json:"beta5YMonthly,omitempty"`
+	BetaBenchmark               string            `json:"betaBenchmark,omitempty"`
+	Change52Week                *float64          `json:"change52Week,omitempty"`
+	High52Week                  *float64          `json:"high52Week,omitempty"`
+	Low52Week                   *float64          `json:"low52Week,omitempty"`
+	MovingAverage50Day          *float64          `json:"movingAverage50Day,omitempty"`
+	MovingAverage200Day         *float64          `json:"movingAverage200Day,omitempty"`
+	AverageVolume3Month         *float64          `json:"averageVolume3Month,omitempty"`
+	AverageVolume10Day          *float64          `json:"averageVolume10Day,omitempty"`
+	TrailingAnnualDividendRate  *float64          `json:"trailingAnnualDividendRate,omitempty"`
+	TrailingAnnualDividendYield *float64          `json:"trailingAnnualDividendYield,omitempty"`
+	ForwardAnnualDividendRate   *float64          `json:"forwardAnnualDividendRate,omitempty"`
+	ForwardAnnualDividendYield  *float64          `json:"forwardAnnualDividendYield,omitempty"`
+	AverageDividendYield5Year   *float64          `json:"averageDividendYield5Year,omitempty"`
+	ExDividendDate              string            `json:"exDividendDate,omitempty"`
+	LastDividendDate            string            `json:"lastDividendDate,omitempty"`
+	LastSplitFactor             string            `json:"lastSplitFactor,omitempty"`
+	LastSplitDate               string            `json:"lastSplitDate,omitempty"`
+	MarketCapB                  *float64          `json:"marketCapB,omitempty"`
+	EnterpriseValueB            *float64          `json:"enterpriseValueB,omitempty"`
+	SharesOutstandingB          *float64          `json:"sharesOutstandingB,omitempty"`
+	ShareBasisAsOf              string            `json:"shareBasisAsOf,omitempty"`
+	// HistoryCacheStatus is one of fresh, stale, or unavailable. The latter two
+	// make degraded long-history calculations visible without exposing raw
+	// upstream errors as telemetry labels.
+	HistoryCacheStatus        string              `json:"historyCacheStatus,omitempty"`
+	HistoryCacheAsOf          string              `json:"historyCacheAsOf,omitempty"`
+	HistoryRefreshFailureKind string              `json:"historyRefreshFailureKind,omitempty"`
+	HistoryRefreshFailed      bool                `json:"historyRefreshFailed,omitempty"`
+	History                   []StatisticSnapshot `json:"history,omitempty"`
 }
 
 // StatisticSnapshot is one point-in-time quote-derived statistics observation.
@@ -49,6 +58,17 @@ type StatisticSnapshot struct {
 	Numeric    map[string]float64 `json:"numeric,omitempty"`
 	Text       map[string]string  `json:"text,omitempty"`
 	Sources    map[string]string  `json:"sources,omitempty"`
+}
+
+// StatisticSnapshotContentEqual compares the payload attached to an already
+// matched provider timestamp. Nil and empty maps are equivalent, which avoids
+// rewriting persisted state for representational-only differences.
+func StatisticSnapshotContentEqual(left, right StatisticSnapshot) bool {
+	return left.Source == right.Source &&
+		left.AsOfSource == right.AsOfSource &&
+		maps.Equal(left.Numeric, right.Numeric) &&
+		maps.Equal(left.Text, right.Text) &&
+		maps.Equal(left.Sources, right.Sources)
 }
 
 // NewStatisticSnapshot converts every numeric or textual LiveQuote value into

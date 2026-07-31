@@ -24,6 +24,7 @@ const (
 	yahooHistoryCacheTTL     = 12 * time.Hour
 	yahooHistoryStaleTTL     = 7 * 24 * time.Hour
 	yahooHistoryFetchTimeout = 45 * time.Second
+	yahooHistoryRetryBackoff = 30 * time.Minute
 	yahooHistoryCacheLimit   = 256
 	yahooHistoryConcurrency  = 4
 )
@@ -188,15 +189,25 @@ type yahooHistoryCacheKey struct {
 }
 
 type yahooHistoryCacheEntry struct {
-	result     yahooQuoteResult
-	cachedAt   time.Time
-	lastAccess time.Time
+	result                 yahooQuoteResult
+	cachedAt               time.Time
+	lastAccess             time.Time
+	nextRefreshAfter       time.Time
+	lastRefreshFailureKind string
 }
 
 type yahooHistoryCall struct {
-	done   chan struct{}
-	result yahooQuoteResult
-	err    error
+	done     chan struct{}
+	result   yahooQuoteResult
+	metadata yahooHistoryMetadata
+	err      error
+}
+
+type yahooHistoryMetadata struct {
+	cacheStatus        string
+	cachedAt           time.Time
+	refreshFailureKind string
+	refreshFailed      bool
 }
 
 // The process-wide cache is keyed by provider identity so test/custom Yahoo
@@ -217,15 +228,17 @@ var yahooHistoryFetchSlots = make(chan struct{}, yahooHistoryConcurrency)
 func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote, error) {
 	ticker = strings.ToUpper(strings.TrimSpace(ticker))
 	historyResult := make(chan struct {
-		result yahooQuoteResult
-		err    error
+		result   yahooQuoteResult
+		metadata yahooHistoryMetadata
+		err      error
 	}, 1)
 	go func() {
-		result, err := y.cachedQuoteHistory(ctx, ticker)
+		result, metadata, err := y.cachedQuoteHistory(ctx, ticker)
 		historyResult <- struct {
-			result yahooQuoteResult
-			err    error
-		}{result: result, err: err}
+			result   yahooQuoteResult
+			metadata yahooHistoryMetadata
+			err      error
+		}{result: result, metadata: metadata, err: err}
 	}()
 
 	// Meta plus five daily observations is enough for current price, market
@@ -244,9 +257,11 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	}
 
 	history := current
+	historyMetadata := yahooHistoryMetadata{cacheStatus: "unavailable"}
 	select {
 	case outcome := <-historyResult:
-		if outcome.err == nil {
+		historyMetadata = outcome.metadata
+		if outcome.err == nil && outcome.metadata.cacheStatus != "unavailable" {
 			history = outcome.result
 		}
 	case <-ctx.Done():
@@ -257,6 +272,12 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	if err != nil {
 		return model.LiveQuote{}, err
 	}
+	quote.HistoryCacheStatus = historyMetadata.cacheStatus
+	if !historyMetadata.cachedAt.IsZero() {
+		quote.HistoryCacheAsOf = historyMetadata.cachedAt.UTC().Format(time.RFC3339)
+	}
+	quote.HistoryRefreshFailureKind = historyMetadata.refreshFailureKind
+	quote.HistoryRefreshFailed = historyMetadata.refreshFailed
 	quote.Beta5YMonthly = y.beta5YMonthly(ctx, ticker, history)
 	if quote.Beta5YMonthly != nil {
 		quote.BetaBenchmark = "SPY adjusted total return"
@@ -266,7 +287,7 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	return quote, nil
 }
 
-func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (yahooQuoteResult, error) {
+func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (yahooQuoteResult, yahooHistoryMetadata, error) {
 	key := yahooHistoryCacheKey{provider: y, ticker: strings.ToUpper(strings.TrimSpace(ticker))}
 	now := time.Now().UTC()
 	yahooHistoryCache.Lock()
@@ -275,15 +296,34 @@ func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (ya
 		entry.lastAccess = now
 		yahooHistoryCache.entries[key] = entry
 		yahooHistoryCache.Unlock()
-		return entry.result, nil
+		return entry.result, yahooHistoryMetadata{cacheStatus: "fresh", cachedAt: entry.cachedAt}, nil
+	}
+	if hasEntry && !entry.nextRefreshAfter.IsZero() && now.Before(entry.nextRefreshAfter) && now.Sub(entry.cachedAt) <= yahooHistoryStaleTTL {
+		entry.lastAccess = now
+		yahooHistoryCache.entries[key] = entry
+		yahooHistoryCache.Unlock()
+		return entry.result, yahooHistoryMetadata{
+			cacheStatus:        "stale",
+			cachedAt:           entry.cachedAt,
+			refreshFailureKind: entry.lastRefreshFailureKind,
+		}, nil
+	}
+	if hasEntry && entry.cachedAt.IsZero() && !entry.nextRefreshAfter.IsZero() && now.Before(entry.nextRefreshAfter) {
+		entry.lastAccess = now
+		yahooHistoryCache.entries[key] = entry
+		yahooHistoryCache.Unlock()
+		return yahooQuoteResult{}, yahooHistoryMetadata{
+			cacheStatus:        "unavailable",
+			refreshFailureKind: entry.lastRefreshFailureKind,
+		}, nil
 	}
 	if call, ok := yahooHistoryCache.calls[key]; ok {
 		yahooHistoryCache.Unlock()
 		select {
 		case <-call.done:
-			return call.result, call.err
+			return call.result, call.metadata, call.err
 		case <-ctx.Done():
-			return yahooQuoteResult{}, ctx.Err()
+			return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true}, ctx.Err()
 		}
 	}
 	call := &yahooHistoryCall{done: make(chan struct{})}
@@ -293,9 +333,9 @@ func (y *YahooMarket) cachedQuoteHistory(ctx context.Context, ticker string) (ya
 	go y.loadQuoteHistory(key, call, entry, hasEntry)
 	select {
 	case <-call.done:
-		return call.result, call.err
+		return call.result, call.metadata, call.err
 	case <-ctx.Done():
-		return yahooQuoteResult{}, ctx.Err()
+		return yahooQuoteResult{}, yahooHistoryMetadata{cacheStatus: "unavailable", refreshFailureKind: classifyQuoteFailure(ctx.Err()), refreshFailed: true}, ctx.Err()
 	}
 }
 
@@ -330,19 +370,39 @@ func (y *YahooMarket) loadQuoteHistory(key yahooHistoryCacheKey, call *yahooHist
 	}()
 
 	now := time.Now().UTC()
+	metadata := yahooHistoryMetadata{cacheStatus: "unavailable"}
+	if fetchErr != nil {
+		metadata.refreshFailureKind = classifyQuoteFailure(fetchErr)
+		metadata.refreshFailed = true
+	}
 	yahooHistoryCache.Lock()
 	if fetchErr == nil {
 		pruneYahooHistoryCacheLocked(key)
 		yahooHistoryCache.entries[key] = yahooHistoryCacheEntry{result: result, cachedAt: now, lastAccess: now}
+		metadata.cacheStatus = "fresh"
+		metadata.cachedAt = now
 	} else if hasStale && now.Sub(stale.cachedAt) <= yahooHistoryStaleTTL {
 		result = stale.result
 		fetchErr = nil
 		stale.lastAccess = now
+		stale.nextRefreshAfter = now.Add(yahooHistoryRetryBackoff)
+		stale.lastRefreshFailureKind = metadata.refreshFailureKind
 		yahooHistoryCache.entries[key] = stale
-	} else if hasStale {
-		delete(yahooHistoryCache.entries, key)
+		metadata.cacheStatus = "stale"
+		metadata.cachedAt = stale.cachedAt
+	} else {
+		if hasStale {
+			delete(yahooHistoryCache.entries, key)
+		}
+		pruneYahooHistoryCacheLocked(key)
+		yahooHistoryCache.entries[key] = yahooHistoryCacheEntry{
+			lastAccess:             now,
+			nextRefreshAfter:       now.Add(yahooHistoryRetryBackoff),
+			lastRefreshFailureKind: metadata.refreshFailureKind,
+		}
 	}
 	call.result = result
+	call.metadata = metadata
 	call.err = fetchErr
 	delete(yahooHistoryCache.calls, key)
 	close(call.done)
@@ -741,7 +801,7 @@ func (y *YahooMarket) beta5YMonthly(ctx context.Context, ticker string, target y
 	if strings.EqualFold(ticker, "SPY") {
 		return liveFloat(1)
 	}
-	benchmark, err := y.cachedQuoteHistory(ctx, "SPY")
+	benchmark, _, err := y.cachedQuoteHistory(ctx, "SPY")
 	if err != nil {
 		return nil
 	}

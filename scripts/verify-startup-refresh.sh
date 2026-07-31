@@ -34,9 +34,10 @@ while :; do
 	refresh_total="$(metric_value equities_refresh_total "$metrics")"
 	refresh_failures="$(metric_value equities_refresh_failures_total "$metrics")"
 	refresh_inflight="$(metric_value equities_refresh_inflight "$metrics")"
+	snapshot_scheduler_running="$(metric_value equities_scheduled_snapshot_scheduler_running "$metrics")"
 
-	if [ -z "$refresh_total" ] || [ -z "$refresh_failures" ] || [ -z "$refresh_inflight" ]; then
-		echo "startup refresh verification could not read refresh metrics" >&2
+	if [ -z "$refresh_total" ] || [ -z "$refresh_failures" ] || [ -z "$refresh_inflight" ] || [ -z "$snapshot_scheduler_running" ]; then
+		echo "startup refresh verification could not read refresh and snapshot scheduler metrics" >&2
 		exit 1
 	fi
 	if [ "$refresh_failures" -gt 0 ]; then
@@ -44,11 +45,15 @@ while :; do
 		exit 1
 	fi
 	if [ "$refresh_total" -ge "$ticker_count" ] && [ "$refresh_inflight" -eq 0 ]; then
+		if [ "$snapshot_scheduler_running" -ne 1 ]; then
+			echo "startup refresh completed but quote snapshot scheduler is not running" >&2
+			exit 1
+		fi
 		echo "startup refresh verified: $refresh_total completed attempts for $ticker_count persisted tickers"
 		exit 0
 	fi
 	if [ "$(date +%s)" -ge "$deadline" ]; then
-		echo "startup refresh timed out: completed=$refresh_total expected=$ticker_count inflight=$refresh_inflight" >&2
+		echo "startup refresh timed out: completed=$refresh_total expected=$ticker_count inflight=$refresh_inflight snapshot_scheduler_running=$snapshot_scheduler_running" >&2
 		exit 1
 	fi
 	sleep "$poll_seconds"
