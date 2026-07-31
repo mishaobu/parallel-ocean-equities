@@ -19,6 +19,8 @@ export interface AnnualPoint {
   stockCompB?: number;
   dilutedEps?: number;
   dilutedSharesB?: number;
+  sharesOutstandingB?: number;
+  sharesOutstandingAsOf?: string;
   cashB?: number;
   investmentsB?: number;
   debtB?: number;
@@ -27,7 +29,9 @@ export interface AnnualPoint {
   receivablesB?: number;
   payablesB?: number;
   assetsB?: number;
+  currentAssetsB?: number;
   liabilitiesB?: number;
+  currentLiabilitiesB?: number;
   equityB?: number;
   peRatio?: number;
   estimate?: boolean;
@@ -64,6 +68,8 @@ export interface QuarterlyPoint {
   dividendsB?: number;
   dilutedEps?: number;
   dilutedSharesB?: number;
+  sharesOutstandingB?: number;
+  sharesOutstandingAsOf?: string;
   cashB?: number;
   investmentsB?: number;
   debtB?: number;
@@ -72,7 +78,9 @@ export interface QuarterlyPoint {
   receivablesB?: number;
   payablesB?: number;
   assetsB?: number;
+  currentAssetsB?: number;
   liabilitiesB?: number;
+  currentLiabilitiesB?: number;
   equityB?: number;
 }
 
@@ -229,6 +237,54 @@ export interface CurrentMetrics {
   low52Week?: number;
   high52Week?: number;
   priceAsOf?: string;
+  sharesOutstandingB?: number;
+  sharesOutstandingAsOf?: string;
+}
+
+export interface LiveQuote {
+  ticker: string;
+  price?: number;
+  previousClose?: number;
+  change?: number;
+  changePercent?: number;
+  asOf?: string;
+  marketState?: string;
+  currency?: string;
+  exchange?: string;
+  source?: string;
+  fieldSources?: Record<string, string>;
+  change52Week?: number;
+  high52Week?: number;
+  low52Week?: number;
+  movingAverage50Day?: number;
+  movingAverage200Day?: number;
+  averageVolume3Month?: number;
+  averageVolume10Day?: number;
+  trailingAnnualDividendRate?: number;
+  trailingAnnualDividendYield?: number;
+  forwardAnnualDividendRate?: number;
+  forwardAnnualDividendYield?: number;
+  averageDividendYield5Year?: number;
+  beta5YMonthly?: number;
+  betaBenchmark?: string;
+  exDividendDate?: string;
+  lastDividendDate?: string;
+  lastSplitFactor?: string;
+  lastSplitDate?: string;
+  sharesOutstandingB?: number;
+  shareBasisAsOf?: string;
+  marketCapB?: number;
+  enterpriseValueB?: number;
+  history?: StatisticSnapshot[];
+}
+
+export interface StatisticSnapshot {
+  asOf: string;
+  source?: string;
+  asOfSource?: string;
+  numeric?: Record<string, number>;
+  text?: Record<string, string>;
+  sources?: Record<string, string>;
 }
 
 export interface Equity {
@@ -245,6 +301,7 @@ export interface Equity {
   quarterlies?: QuarterlyPoint[];
   prices?: PricePoint[];
   current: CurrentMetrics;
+  quoteHistory?: StatisticSnapshot[];
   valuation?: ValuationMetrics;
   forecast?: ForecastModel;
   models?: ValuationModels;

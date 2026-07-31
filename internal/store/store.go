@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -132,12 +133,218 @@ func (s *Store) SetRefreshing(ticker string) error {
 
 func (s *Store) SetResult(ticker string, result *model.Equity) error {
 	return s.update(ticker, func(equity *model.Equity) {
+		quoteHistory := equity.QuoteHistory
 		result.Ticker = strings.ToUpper(ticker)
 		result.Status = "ready"
 		result.Error = ""
 		result.UpdatedAt = time.Now().UTC()
 		*equity = *result
+		equity.QuoteHistory = quoteHistory
 	})
+}
+
+const (
+	quoteHistoryYears = 10
+	quoteHistoryLimit = 4000
+)
+
+// RecordQuoteSnapshot persists at most one quote-derived statistics snapshot
+// per ticker and UTC day. A later observation replaces the same day's prior
+// point; history is ordered oldest-first and bounded to ten years / 4,000 rows.
+func (s *Store) RecordQuoteSnapshot(ticker string, snapshot model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
+	return s.RecordQuoteSnapshots(ticker, nil, snapshot)
+}
+
+// RecordQuoteSnapshots seeds missing calendar months from a bounded historical
+// backfill and records the current observation in one locked disk save. Any
+// month already represented in persisted history is authoritative and is not
+// replaced by a historical seed. The current point still follows the normal
+// same-UTC-day rule: only a later asOf replaces an existing observation.
+func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.StatisticSnapshot, current model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
+	current, currentAt, err := validatedStatisticSnapshot(current)
+	if err != nil {
+		return nil, err
+	}
+	type candidate struct {
+		snapshot model.StatisticSnapshot
+		observed time.Time
+	}
+	backfillByMonth := make(map[string]candidate, len(monthlyBackfill))
+	for _, snapshot := range monthlyBackfill {
+		normalized, observed, validateErr := validatedStatisticSnapshot(snapshot)
+		if validateErr != nil {
+			return nil, fmt.Errorf("quote history backfill: %w", validateErr)
+		}
+		month := observed.Format("2006-01")
+		if prior, exists := backfillByMonth[month]; !exists || observed.After(prior.observed) {
+			backfillByMonth[month] = candidate{snapshot: normalized, observed: observed}
+		}
+	}
+	backfill := make([]candidate, 0, len(backfillByMonth))
+	for _, row := range backfillByMonth {
+		backfill = append(backfill, row)
+	}
+	sort.Slice(backfill, func(i, j int) bool { return backfill[i].observed.Before(backfill[j].observed) })
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	equity, exists := s.state.Tickers[strings.ToUpper(strings.TrimSpace(ticker))]
+	if !exists {
+		return nil, ErrNotFound
+	}
+	history := cloneStatisticSnapshots(equity.QuoteHistory)
+	occupiedMonths := make(map[string]bool, len(history)+1)
+	for _, snapshot := range history {
+		observed, parseErr := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+		if parseErr == nil {
+			occupiedMonths[observed.UTC().Format("2006-01")] = true
+		}
+	}
+	// Never seed the current month: its separately derived current snapshot may
+	// carry exact SEC-share-based market value fields that backfill must not.
+	occupiedMonths[currentAt.Format("2006-01")] = true
+	changed := false
+	for _, row := range backfill {
+		if !row.observed.Before(currentAt) {
+			continue
+		}
+		month := row.observed.Format("2006-01")
+		if occupiedMonths[month] {
+			continue
+		}
+		var accepted bool
+		history, accepted = mergeQuoteHistory(history, row.snapshot, row.observed)
+		if accepted {
+			changed = true
+			occupiedMonths[month] = true
+		}
+	}
+	var currentAccepted bool
+	history, currentAccepted = mergeQuoteHistory(history, current, currentAt)
+	changed = changed || currentAccepted
+	if !changed {
+		return cloneStatisticSnapshots(equity.QuoteHistory), nil
+	}
+	previousHistory := equity.QuoteHistory
+	previousVersion := s.state.Version
+	previousUpdatedAt := s.state.UpdatedAt
+	equity.QuoteHistory = history
+	if err := s.saveLocked(); err != nil {
+		equity.QuoteHistory = previousHistory
+		s.state.Version = previousVersion
+		s.state.UpdatedAt = previousUpdatedAt
+		return nil, err
+	}
+	return cloneStatisticSnapshots(history), nil
+}
+
+func validatedStatisticSnapshot(snapshot model.StatisticSnapshot) (model.StatisticSnapshot, time.Time, error) {
+	observedAt, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+	if err != nil {
+		return model.StatisticSnapshot{}, time.Time{}, fmt.Errorf("quote snapshot asOf must be RFC3339: %w", err)
+	}
+	if len(snapshot.Numeric) == 0 && len(snapshot.Text) == 0 {
+		return model.StatisticSnapshot{}, time.Time{}, errors.New("quote snapshot contains no statistic values")
+	}
+	for key, value := range snapshot.Numeric {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return model.StatisticSnapshot{}, time.Time{}, fmt.Errorf("quote snapshot numeric value %q must be finite", key)
+		}
+	}
+	observedAt = observedAt.UTC()
+	snapshot.AsOf = observedAt.Format(time.RFC3339Nano)
+	return cloneStatisticSnapshot(snapshot), observedAt, nil
+}
+
+type datedStatisticSnapshot struct {
+	snapshot model.StatisticSnapshot
+	observed time.Time
+}
+
+func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.StatisticSnapshot, incomingAt time.Time) ([]model.StatisticSnapshot, bool) {
+	byDay := make(map[string]datedStatisticSnapshot, len(history)+1)
+	for _, snapshot := range history {
+		observed, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+		if err != nil {
+			continue
+		}
+		observed = observed.UTC()
+		day := observed.Format("2006-01-02")
+		current, exists := byDay[day]
+		if !exists || observed.After(current.observed) {
+			snapshot.AsOf = observed.Format(time.RFC3339Nano)
+			byDay[day] = datedStatisticSnapshot{snapshot: cloneStatisticSnapshot(snapshot), observed: observed}
+		}
+	}
+
+	incomingDay := incomingAt.Format("2006-01-02")
+	if current, exists := byDay[incomingDay]; exists && !incomingAt.After(current.observed) {
+		return cloneStatisticSnapshots(history), false
+	}
+	byDay[incomingDay] = datedStatisticSnapshot{snapshot: incoming, observed: incomingAt}
+
+	latest := incomingAt
+	for _, row := range byDay {
+		if row.observed.After(latest) {
+			latest = row.observed
+		}
+	}
+	cutoff := latest.AddDate(-quoteHistoryYears, 0, 0)
+	rows := make([]datedStatisticSnapshot, 0, len(byDay))
+	for _, row := range byDay {
+		if !row.observed.Before(cutoff) {
+			rows = append(rows, row)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].observed.Before(rows[j].observed) })
+	if len(rows) > quoteHistoryLimit {
+		rows = rows[len(rows)-quoteHistoryLimit:]
+	}
+	out := make([]model.StatisticSnapshot, len(rows))
+	for index, row := range rows {
+		out[index] = cloneStatisticSnapshot(row.snapshot)
+	}
+	return out, true
+}
+
+func cloneStatisticSnapshots(history []model.StatisticSnapshot) []model.StatisticSnapshot {
+	if history == nil {
+		return nil
+	}
+	clone := make([]model.StatisticSnapshot, len(history))
+	for index, snapshot := range history {
+		clone[index] = cloneStatisticSnapshot(snapshot)
+	}
+	return clone
+}
+
+func cloneStatisticSnapshot(snapshot model.StatisticSnapshot) model.StatisticSnapshot {
+	snapshot.Numeric = cloneFloatMap(snapshot.Numeric)
+	snapshot.Text = cloneStringMap(snapshot.Text)
+	snapshot.Sources = cloneStringMap(snapshot.Sources)
+	return snapshot
+}
+
+func cloneFloatMap(source map[string]float64) map[string]float64 {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]float64, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
 }
 
 func (s *Store) SetError(ticker string, refreshErr error) error {

@@ -18,6 +18,7 @@ import (
 type fakeService struct {
 	state model.State
 	added string
+	quote model.LiveQuote
 }
 
 func (f *fakeService) Snapshot() model.State {
@@ -31,6 +32,11 @@ func (f *fakeService) DeleteTicker(string) error     { return nil }
 func (f *fakeService) Queue(string) bool             { return true }
 func (f *fakeService) RefreshAll() int               { return 1 }
 func (f *fakeService) AddTicker(ticker string) error { f.added = ticker; return nil }
+func (f *fakeService) Quote(_ context.Context, ticker string) (model.LiveQuote, error) {
+	quote := f.quote
+	quote.Ticker = ticker
+	return quote, nil
+}
 func (f *fakeService) PreviewTicker(_ context.Context, ticker string) (analysis.TickerPreview, error) {
 	return analysis.TickerPreview{Ticker: ticker, Company: "Preview Co", InstrumentType: "US equity", Source: "test"}, nil
 }
@@ -50,14 +56,14 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	}
 	state := model.NewState()
 	state.UpdatedAt = time.Now()
-	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}, Valuations: []model.ValuationPoint{{Date: "2026-01-01", PE: floatPtr(20)}}}
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN", Status: "ready", Quarterlies: []model.QuarterlyPoint{{FiscalYear: 2026, FiscalQuarter: "Q1"}}, Prices: []model.PricePoint{{Date: "2026-01-01", Close: 1}}, QuoteHistory: []model.StatisticSnapshot{{AsOf: "2026-07-30T14:30:00Z", Numeric: map[string]float64{"price": 209}}}, Valuations: []model.ValuationPoint{{Date: "2026-01-01", PE: floatPtr(20)}}}
 	state.Macro = model.MacroSeries{
 		Points:    []model.MacroPoint{{Date: "2026-01-01", Inflation: floatPtr(3), CoreInflation: floatPtr(2.5)}},
 		Countries: []model.CountrySeries{{Code: "US", Name: "United States"}},
 		Assets:    []model.AssetSeries{{Symbol: "SPY", Label: "US large cap"}},
 		Options:   model.OptionsSeries{Snapshots: []model.OptionSnapshot{{Ticker: "SPY", AsOf: "2026-01-01"}}},
 	}
-	service := &fakeService{state: state}
+	service := &fakeService{state: state, quote: model.LiveQuote{Price: floatPtr(210.25), AsOf: "2026-07-31T14:30:00Z", Source: "fixture", History: []model.StatisticSnapshot{{AsOf: "2026-07-31T14:30:00Z", Source: "fixture", Numeric: map[string]float64{"price": 210.25, "market-cap": 3150}}}}}
 	handler := New(service, Config{BasePath: "/equities", StaticDir: dir, MonetaryPath: "/monetary", MonetaryStaticDir: monetaryDir, MacroPath: "/macro", MacroStaticDir: macroDir}).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/equities/", nil)
@@ -79,6 +85,9 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || !bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
 		t.Fatalf("overview should omit quarterlies and retain compact prices: %d %s", resp.Code, resp.Body.String())
+	}
+	if bytes.Contains(resp.Body.Bytes(), []byte("quoteHistory")) {
+		t.Fatalf("overview should omit quote history: %s", resp.Body.String())
 	}
 	etag := resp.Header().Get("ETag")
 	if etag == "" {
@@ -123,6 +132,22 @@ func TestBasePathAndTickerAPI(t *testing.T) {
 	handler.ServeHTTP(resp, req)
 	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte("quarterlies")) || !bytes.Contains(resp.Body.Bytes(), []byte("prices")) {
 		t.Fatalf("ticker detail should include raw histories: %d %s", resp.Code, resp.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN/quote", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"price":210.25`)) || !bytes.Contains(resp.Body.Bytes(), []byte(`"source":"fixture"`)) || !bytes.Contains(resp.Body.Bytes(), []byte(`"history"`)) || !bytes.Contains(resp.Body.Bytes(), []byte(`"market-cap":3150`)) {
+		t.Fatalf("ticker quote response: %d %s", resp.Code, resp.Body.String())
+	}
+	if resp.Header().Get("Cache-Control") != "private, max-age=60" {
+		t.Fatalf("unexpected quote cache control: %q", resp.Header().Get("Cache-Control"))
+	}
+	req = httptest.NewRequest(http.MethodGet, "/equities/api/tickers/AMZN/quote?history=0", nil)
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK || !bytes.Contains(resp.Body.Bytes(), []byte(`"price":210.25`)) || bytes.Contains(resp.Body.Bytes(), []byte(`"history"`)) {
+		t.Fatalf("ticker quote without history: %d %s", resp.Code, resp.Body.String())
 	}
 
 	body, _ := json.Marshal(map[string]string{"ticker": "NVDA"})
