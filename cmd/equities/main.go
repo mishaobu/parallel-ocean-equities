@@ -52,6 +52,27 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	service.Start(ctx, envInt("REFRESH_WORKERS", 2))
+	if envBool("QUOTE_SNAPSHOT_ENABLED", true) {
+		snapshotConfig := analysis.DefaultQuoteSnapshotSchedulerConfig()
+		snapshotConfig.RegularInterval = envDuration("QUOTE_SNAPSHOT_REGULAR_INTERVAL", snapshotConfig.RegularInterval)
+		snapshotConfig.PostCloseInterval = envDuration("QUOTE_SNAPSHOT_POST_CLOSE_INTERVAL", snapshotConfig.PostCloseInterval)
+		snapshotConfig.ClosedInterval = envDuration("QUOTE_SNAPSHOT_CLOSED_INTERVAL", snapshotConfig.ClosedInterval)
+		snapshotConfig.RetryInterval = envDuration("QUOTE_SNAPSHOT_RETRY_INTERVAL", snapshotConfig.RetryInterval)
+		snapshotConfig.BusyInterval = envDuration("QUOTE_SNAPSHOT_BUSY_INTERVAL", snapshotConfig.BusyInterval)
+		snapshotConfig.DiscoveryInterval = envDuration("QUOTE_SNAPSHOT_DISCOVERY_INTERVAL", snapshotConfig.DiscoveryInterval)
+		snapshotConfig.RequestTimeout = envDuration("QUOTE_SNAPSHOT_TIMEOUT", snapshotConfig.RequestTimeout)
+		snapshotConfig.InitialDelay = envDuration("QUOTE_SNAPSHOT_INITIAL_DELAY", snapshotConfig.InitialDelay)
+		snapshotConfig.InitialStagger = envDuration("QUOTE_SNAPSHOT_INITIAL_STAGGER", snapshotConfig.InitialStagger)
+		snapshotConfig.Concurrency = envInt("QUOTE_SNAPSHOT_CONCURRENCY", snapshotConfig.Concurrency)
+		snapshotConfig.Logger = logger
+		snapshotScheduler, schedulerErr := analysis.NewQuoteSnapshotScheduler(service, service, snapshotConfig)
+		if schedulerErr != nil {
+			logger.Error("configure quote snapshot scheduler", "error", schedulerErr)
+			os.Exit(1)
+		}
+		service.WithQuoteRequestTimeout(snapshotConfig.RequestTimeout)
+		go snapshotScheduler.Run(ctx)
+	}
 	if envBool("STARTUP_REFRESH", false) {
 		go func() {
 			select {
@@ -130,6 +151,18 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
 	if err != nil {
 		return fallback
 	}

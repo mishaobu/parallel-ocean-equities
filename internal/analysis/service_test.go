@@ -38,6 +38,23 @@ type controlledQuoteAnalyzer struct {
 	panicValue any
 }
 
+type deadlineQuoteAnalyzer struct {
+	deadline chan time.Time
+}
+
+func (a *deadlineQuoteAnalyzer) Analyze(_ context.Context, _ string, existing *model.Equity) (*model.Equity, error) {
+	return existing, nil
+}
+
+func (a *deadlineQuoteAnalyzer) Quote(ctx context.Context, ticker string, _ *model.Equity) (model.LiveQuote, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return model.LiveQuote{}, errors.New("provider context has no deadline")
+	}
+	a.deadline <- deadline
+	return model.LiveQuote{Ticker: ticker, Price: floatPtr(123), AsOf: "2026-07-31T15:30:00Z", Source: "fixture"}, nil
+}
+
 func (c *controlledQuoteAnalyzer) Quote(ctx context.Context, ticker string, _ *model.Equity) (model.LiveQuote, error) {
 	c.calls.Add(1)
 	c.startOnce.Do(func() { close(c.started) })
@@ -158,12 +175,36 @@ func TestServiceCachesLiveQuoteForShortTTL(t *testing.T) {
 		t.Fatalf("quote history was not returned and persisted: first=%+v stored=%+v", first.History, stored)
 	}
 	service.WithQuoteTTL(0)
+	service.markQuotePersisted("AMZN", time.Now().UTC().Add(-quotePersistenceInterval))
 	third, err := service.Quote(context.Background(), "AMZN")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if analyzer.calls != 2 || third.Price == nil || *third.Price == *second.Price {
 		t.Fatalf("disabled cache should refetch: calls=%d second=%+v third=%+v", analyzer.calls, second, third)
+	}
+	correctedHistory := service.Snapshot().Tickers["AMZN"].QuoteHistory
+	if len(correctedHistory) != 2 || correctedHistory[1].Numeric["price"] != *third.Price {
+		t.Fatalf("equal-timestamp quote correction was not persisted: quote=%+v history=%+v", third, correctedHistory)
+	}
+}
+
+func TestServiceQuoteRequestTimeoutConfiguresProviderWork(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &deadlineQuoteAnalyzer{deadline: make(chan time.Time, 1)}
+	timeout := 3 * time.Second
+	started := time.Now()
+	service := NewService(state, analyzer).WithQuoteRequestTimeout(timeout)
+	if _, err := service.Quote(context.Background(), "AMZN"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := <-analyzer.deadline
+	if got := deadline.Sub(started); got < timeout-500*time.Millisecond || got > timeout+500*time.Millisecond {
+		t.Fatalf("provider deadline offset = %s, want approximately %s", got, timeout)
 	}
 }
 

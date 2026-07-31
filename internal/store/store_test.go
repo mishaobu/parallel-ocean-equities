@@ -88,6 +88,22 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 		t.Fatalf("later same-day observation did not replace history: %#v", history)
 	}
 
+	history, err = stateStore.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{AsOf: "2026-07-31T15:00:00Z", Source: "corrected fixture", AsOfSource: "same exchange timestamp", Numeric: map[string]float64{"price": 112}, Sources: map[string]string{"price": "corrected price"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Numeric["price"] != 112 || history[0].Source != "corrected fixture" {
+		t.Fatalf("equal-timestamp correction did not replace history: %#v", history)
+	}
+	versionAfterCorrection := stateStore.Snapshot().Version
+	history, err = stateStore.RecordQuoteSnapshot("AMZN", history[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateStore.Snapshot().Version != versionAfterCorrection {
+		t.Fatal("identical equal-timestamp snapshot rewrote persisted state")
+	}
+
 	history, err = stateStore.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{AsOf: "2026-08-01T03:00:00+02:00", Numeric: map[string]float64{"price": 111}})
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +120,7 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(persisted.QuoteHistory) != 2 || persisted.QuoteHistory[0].Numeric["price"] != 110 || persisted.QuoteHistory[0].Sources["price"] != "later price" || persisted.QuoteHistory[0].AsOfSource != "later exchange timestamp" {
+	if len(persisted.QuoteHistory) != 2 || persisted.QuoteHistory[0].Numeric["price"] != 112 || persisted.QuoteHistory[0].Sources["price"] != "corrected price" || persisted.QuoteHistory[0].AsOfSource != "same exchange timestamp" {
 		t.Fatalf("snapshot history was not persisted exactly: %#v", persisted.QuoteHistory)
 	}
 }

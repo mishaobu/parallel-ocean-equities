@@ -18,6 +18,13 @@ var tickerPattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{0,9}$`)
 
 var ErrInvalidTicker = errors.New("ticker must be 1-10 letters, numbers, dots, or hyphens")
 
+var (
+	ErrQuoteUpstream    = errors.New("live quote upstream failed")
+	ErrQuotePersistence = errors.New("live quote persistence failed")
+)
+
+const defaultQuoteRequestTimeout = 20 * time.Second
+
 type Analyzer interface {
 	Analyze(context.Context, string, *model.Equity) (*model.Equity, error)
 }
@@ -43,6 +50,16 @@ type Stats struct {
 	MacroRefreshing  bool      `json:"macroRefreshing"`
 	MacroLastRefresh time.Time `json:"macroLastRefresh,omitempty"`
 	MacroFailures    int64     `json:"macroFailures"`
+
+	SnapshotSchedulerRunning      bool                           `json:"snapshotSchedulerRunning"`
+	ScheduledSnapshotInFlight     int                            `json:"scheduledSnapshotInFlight"`
+	ScheduledSnapshotAttempts     int64                          `json:"scheduledSnapshotAttempts"`
+	ScheduledSnapshotSuccesses    int64                          `json:"scheduledSnapshotSuccesses"`
+	ScheduledSnapshotNoNewSession int64                          `json:"scheduledSnapshotNoNewSession"`
+	ScheduledSnapshotFailures     map[string]int64               `json:"scheduledSnapshotFailures"`
+	HistoryRefreshFailures        map[string]int64               `json:"historyRefreshFailures"`
+	ScheduledQuoteFieldsExpected  int                            `json:"scheduledQuoteFieldsExpected"`
+	ScheduledSnapshotObservations map[string]SnapshotObservation `json:"scheduledSnapshotObservations"`
 }
 
 type cachedQuote struct {
@@ -63,9 +80,11 @@ type Service struct {
 	macro            MacroAnalyzer
 	macroQueue       chan struct{}
 	quoteTTL         time.Duration
+	quoteTimeout     time.Duration
 	quoteCache       map[string]cachedQuote
 	quoteCalls       map[string]*quoteCall
 	quotePersistedAt map[string]time.Time
+	snapshotMetrics  scheduledSnapshotMetrics
 
 	mu            sync.Mutex
 	inflight      map[string]struct{}
@@ -78,17 +97,21 @@ type Service struct {
 }
 
 func NewService(state *store.Store, analyzer Analyzer) *Service {
-	return &Service{
+	service := &Service{
 		store:            state,
 		analyzer:         analyzer,
 		queue:            make(chan string, 64),
 		macroQueue:       make(chan struct{}, 1),
 		quoteTTL:         time.Minute,
+		quoteTimeout:     defaultQuoteRequestTimeout,
 		quoteCache:       make(map[string]cachedQuote),
 		quoteCalls:       make(map[string]*quoteCall),
 		quotePersistedAt: make(map[string]time.Time),
+		snapshotMetrics:  newScheduledSnapshotMetrics(),
 		inflight:         make(map[string]struct{}),
 	}
+	service.seedScheduledSnapshotObservations()
+	return service
 }
 
 func (s *Service) WithMacro(analyzer MacroAnalyzer) *Service {
@@ -104,6 +127,19 @@ func (s *Service) WithQuoteTTL(ttl time.Duration) *Service {
 	defer s.mu.Unlock()
 	s.quoteTTL = ttl
 	s.quoteCache = make(map[string]cachedQuote)
+	return s
+}
+
+// WithQuoteRequestTimeout configures the actual shared provider-work deadline,
+// not only an individual caller's wait. A non-positive value restores the
+// service default.
+func (s *Service) WithQuoteRequestTimeout(timeout time.Duration) *Service {
+	if timeout <= 0 {
+		timeout = defaultQuoteRequestTimeout
+	}
+	s.mu.Lock()
+	s.quoteTimeout = timeout
+	s.mu.Unlock()
 	return s
 }
 
@@ -153,6 +189,7 @@ func (s *Service) DeleteTicker(ticker string) error {
 	s.mu.Lock()
 	delete(s.quoteCache, ticker)
 	delete(s.quotePersistedAt, ticker)
+	delete(s.snapshotMetrics.observations, ticker)
 	s.mu.Unlock()
 	return nil
 }
@@ -220,17 +257,18 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 	}()
 	// The shared request outlives any one HTTP caller. Each waiter still observes
 	// its own context while the provider work is bounded independently.
-	quoteCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	quoteCtx, cancel := context.WithTimeout(context.Background(), s.quoteRequestTimeout())
 	defer cancel()
 	quote, quoteErr = quoter.Quote(quoteCtx, ticker, existing)
 	if quoteErr != nil {
+		quoteErr = fmt.Errorf("%w: %w", ErrQuoteUpstream, quoteErr)
 		return
 	}
-	if s.quotePersistenceDue(ticker, time.Now().UTC()) {
+	if s.quotePersistenceDue(ticker, time.Now().UTC()) && quoteObservationNeedsPersistence(existing.QuoteHistory, quote) {
 		history, err := s.store.RecordQuoteSnapshots(ticker, quote.History, model.NewStatisticSnapshot(quote))
 		if err != nil {
 			quote = model.LiveQuote{}
-			quoteErr = fmt.Errorf("persist live quote statistics: %w", err)
+			quoteErr = fmt.Errorf("%w: persist live quote statistics: %w", ErrQuotePersistence, err)
 			return
 		}
 		quote.History = history
@@ -238,6 +276,47 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 	} else {
 		quote.History = existing.QuoteHistory
 	}
+}
+
+func (s *Service) quoteRequestTimeout() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quoteTimeout
+}
+
+func quoteObservationNeedsPersistence(history []model.StatisticSnapshot, quote model.LiveQuote) bool {
+	if !quoteHasProviderObservation(quote) {
+		return false
+	}
+	observedAt, _ := time.Parse(time.RFC3339Nano, quote.AsOf)
+	candidate := model.NewStatisticSnapshot(quote)
+	for index := len(history) - 1; index >= 0; index-- {
+		priorAt, parseErr := time.Parse(time.RFC3339Nano, history[index].AsOf)
+		if parseErr == nil {
+			switch {
+			case observedAt.After(priorAt):
+				return true
+			case observedAt.Before(priorAt):
+				return false
+			default:
+				// Closing values and filing-enriched market values can be
+				// corrected without changing the provider market timestamp.
+				return !model.StatisticSnapshotContentEqual(history[index], candidate)
+			}
+		}
+	}
+	return true
+}
+
+func quoteHasProviderObservation(quote model.LiveQuote) bool {
+	// A request-time fallback is useful for serving a current response but is
+	// not evidence of a new provider market observation and must not create a
+	// durable time-series point or scheduled-snapshot success.
+	if strings.Contains(strings.ToLower(quote.FieldSources["asOf"]), "request time fallback") {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, quote.AsOf)
+	return err == nil
 }
 
 const quotePersistenceInterval = 15 * time.Minute
@@ -326,9 +405,20 @@ func (s *Service) Snapshot() model.State {
 	return s.store.Snapshot()
 }
 
+// Tickers returns the normalized watchlist without cloning the full state.
+func (s *Service) Tickers() []string {
+	return s.store.Tickers()
+}
+
 func (s *Service) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	snapshotFailures := cloneFailureCounts(s.snapshotMetrics.failures)
+	historyFailures := cloneFailureCounts(s.snapshotMetrics.historyRefreshFailures)
+	observations := make(map[string]SnapshotObservation, len(s.snapshotMetrics.observations))
+	for ticker, observation := range s.snapshotMetrics.observations {
+		observations[ticker] = observation
+	}
 	return Stats{
 		RefreshTotal:     s.total.Load(),
 		RefreshFailures:  s.failures.Load(),
@@ -338,6 +428,16 @@ func (s *Service) Stats() Stats {
 		MacroRefreshing:  s.macroInflight,
 		MacroLastRefresh: s.macroLast,
 		MacroFailures:    s.macroFailures.Load(),
+
+		SnapshotSchedulerRunning:      s.snapshotMetrics.schedulerRunning,
+		ScheduledSnapshotInFlight:     s.snapshotMetrics.inflight,
+		ScheduledSnapshotAttempts:     s.snapshotMetrics.attempts,
+		ScheduledSnapshotSuccesses:    s.snapshotMetrics.successes,
+		ScheduledSnapshotNoNewSession: s.snapshotMetrics.noNewSession,
+		ScheduledSnapshotFailures:     snapshotFailures,
+		HistoryRefreshFailures:        historyFailures,
+		ScheduledQuoteFieldsExpected:  expectedScheduledQuoteFieldCount,
+		ScheduledSnapshotObservations: observations,
 	}
 }
 

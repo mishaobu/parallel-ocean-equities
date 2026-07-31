@@ -169,7 +169,7 @@ func TestYahooQuoteCachesLongHistoryAndUsesRecentStaleDataOnRefreshError(t *test
 		case "10y":
 			historyCalls.Add(1)
 			if failHistory.Load() {
-				http.Error(w, "temporary upstream failure", http.StatusServiceUnavailable)
+				http.Error(w, "rate limited", http.StatusTooManyRequests)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(historyPayload)
@@ -196,11 +196,15 @@ func TestYahooQuoteCachesLongHistoryAndUsesRecentStaleDataOnRefreshError(t *test
 	if len(first.History) == 0 || len(second.History) == 0 {
 		t.Fatalf("cached history disappeared: first=%+v second=%+v", first.History, second.History)
 	}
+	if first.HistoryCacheStatus != "fresh" || second.HistoryCacheStatus != "fresh" || first.HistoryCacheAsOf == "" || second.HistoryCacheAsOf != first.HistoryCacheAsOf {
+		t.Fatalf("fresh cache metadata first=%+v second=%+v", first, second)
+	}
 
 	key := yahooHistoryCacheKey{provider: provider, ticker: "CACHE"}
 	yahooHistoryCache.Lock()
 	entry := yahooHistoryCache.entries[key]
 	entry.cachedAt = time.Now().UTC().Add(-yahooHistoryCacheTTL - time.Minute)
+	expiredCacheAsOf := entry.cachedAt.Format(time.RFC3339)
 	yahooHistoryCache.entries[key] = entry
 	yahooHistoryCache.Unlock()
 	failHistory.Store(true)
@@ -212,7 +216,42 @@ func TestYahooQuoteCachesLongHistoryAndUsesRecentStaleDataOnRefreshError(t *test
 	if currentCalls.Load() != 3 || historyCalls.Load() != 2 || len(stale.History) == 0 {
 		t.Fatalf("stale fallback current=%d history=%d quote=%+v", currentCalls.Load(), historyCalls.Load(), stale)
 	}
+	if stale.HistoryCacheStatus != "stale" || stale.HistoryCacheAsOf != expiredCacheAsOf || stale.HistoryRefreshFailureKind != SnapshotFailureThrottled || !stale.HistoryRefreshFailed {
+		t.Fatalf("stale fallback metadata = %+v", stale)
+	}
 	assertLiveFloat(t, "stale-fallback live price", stale.Price, 101)
+
+	backoff, err := provider.Quote(context.Background(), "CACHE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentCalls.Load() != 4 || historyCalls.Load() != 2 {
+		t.Fatalf("stale retry backoff did not suppress 10y fetch: current=%d history=%d", currentCalls.Load(), historyCalls.Load())
+	}
+	if backoff.HistoryCacheStatus != "stale" || backoff.HistoryCacheAsOf != expiredCacheAsOf || backoff.HistoryRefreshFailureKind != SnapshotFailureThrottled || backoff.HistoryRefreshFailed {
+		t.Fatalf("backoff cache metadata = %+v", backoff)
+	}
+
+	// A cold-start history failure also gets a negative-cache backoff. Current
+	// quote data remains available, while page traffic cannot retry the
+	// expensive ten-year request on every one-minute live-quote cache expiry.
+	cold, err := provider.Quote(context.Background(), "COLD")
+	if err != nil {
+		t.Fatalf("cold history failure should preserve a live quote: %v", err)
+	}
+	if currentCalls.Load() != 5 || historyCalls.Load() != 3 || cold.HistoryCacheStatus != "unavailable" || cold.HistoryRefreshFailureKind != SnapshotFailureThrottled || !cold.HistoryRefreshFailed {
+		t.Fatalf("cold failure current=%d history=%d quote=%+v", currentCalls.Load(), historyCalls.Load(), cold)
+	}
+	coldBackoff, err := provider.Quote(context.Background(), "COLD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentCalls.Load() != 6 || historyCalls.Load() != 3 {
+		t.Fatalf("cold retry backoff did not suppress 10y fetch: current=%d history=%d", currentCalls.Load(), historyCalls.Load())
+	}
+	if coldBackoff.HistoryCacheStatus != "unavailable" || coldBackoff.HistoryRefreshFailureKind != SnapshotFailureThrottled || coldBackoff.HistoryRefreshFailed {
+		t.Fatalf("cold backoff metadata = %+v", coldBackoff)
+	}
 }
 
 func TestYahooQuoteHistoryFetchIsSingleflight(t *testing.T) {

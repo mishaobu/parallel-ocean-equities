@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ type fakeService struct {
 	state model.State
 	added string
 	quote model.LiveQuote
+	stats analysis.Stats
 }
 
 func (f *fakeService) Snapshot() model.State {
@@ -27,7 +29,7 @@ func (f *fakeService) Snapshot() model.State {
 	_ = json.Unmarshal(data, &state)
 	return state
 }
-func (f *fakeService) Stats() analysis.Stats         { return analysis.Stats{} }
+func (f *fakeService) Stats() analysis.Stats         { return f.stats }
 func (f *fakeService) DeleteTicker(string) error     { return nil }
 func (f *fakeService) Queue(string) bool             { return true }
 func (f *fakeService) RefreshAll() int               { return 1 }
@@ -170,5 +172,94 @@ func TestCompactPricesRetainsQuarterEnds(t *testing.T) {
 	})
 	if len(rows) != 2 || rows[0].Date != "2025-03-31" || rows[1].Date != "2025-04-30" {
 		t.Fatalf("unexpected quarter-end rows: %+v", rows)
+	}
+}
+
+func TestMetricsExposeBoundedScheduledSnapshotTelemetry(t *testing.T) {
+	now := time.Now().UTC()
+	state := model.NewState()
+	state.Tickers["AMZN"] = &model.Equity{Ticker: "AMZN"}
+	service := &fakeService{
+		state: state,
+		stats: analysis.Stats{
+			SnapshotSchedulerRunning:      true,
+			ScheduledSnapshotInFlight:     2,
+			ScheduledSnapshotAttempts:     9,
+			ScheduledSnapshotSuccesses:    5,
+			ScheduledSnapshotNoNewSession: 3,
+			ScheduledSnapshotFailures: map[string]int64{
+				analysis.SnapshotFailureThrottled: 1,
+			},
+			HistoryRefreshFailures: map[string]int64{
+				analysis.SnapshotFailureThrottled: 2,
+			},
+			ScheduledQuoteFieldsExpected: 16,
+			ScheduledSnapshotObservations: map[string]analysis.SnapshotObservation{
+				"AMZN": {
+					LastSuccess:               now.Add(-25 * time.Minute),
+					LastHealthyCheck:          now.Add(-time.Minute),
+					LastObservation:           now.Add(-25 * time.Minute),
+					MarketState:               "regular",
+					QuoteFieldsPresent:        12,
+					HistoryCacheStatus:        "stale",
+					HistoryCacheAsOf:          now.Add(-13 * time.Hour),
+					HistoryRefreshFailureKind: analysis.SnapshotFailureThrottled,
+				},
+			},
+		},
+	}
+	handler := New(service, Config{}).Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	body := resp.Body.String()
+
+	if resp.Code != http.StatusOK || resp.Header().Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatalf("metrics response: status=%d content-type=%q", resp.Code, resp.Header().Get("Content-Type"))
+	}
+	for _, expected := range []string{
+		"equities_scheduled_snapshot_scheduler_running 1\n",
+		"equities_scheduled_snapshot_inflight 2\n",
+		"equities_scheduled_snapshot_attempts_total 9\n",
+		"equities_scheduled_snapshot_successes_total 5\n",
+		"equities_scheduled_snapshot_no_new_session_total 3\n",
+		`equities_scheduled_snapshot_failures_total{reason="throttled"} 1`,
+		`equities_scheduled_snapshot_failures_total{reason="other"} 0`,
+		`equities_scheduled_snapshot_history_refresh_failures_total{reason="throttled"} 2`,
+		`equities_scheduled_snapshot_stale{ticker="AMZN",market_state="regular"} 1`,
+		`equities_scheduled_snapshot_quote_fields_present{ticker="AMZN"} 12`,
+		`equities_scheduled_snapshot_quote_fields_expected{ticker="AMZN"} 16`,
+		`equities_scheduled_snapshot_quote_field_coverage_ratio{ticker="AMZN"} 0.75`,
+		`equities_scheduled_snapshot_history_cache_status{ticker="AMZN",status="stale"} 1`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("metrics missing %q:\n%s", expected, body)
+		}
+	}
+	if strings.Contains(body, "rate limited") || strings.Contains(body, "NaN") || strings.Contains(body, "+Inf") {
+		t.Fatalf("metrics exposed raw errors or invalid values:\n%s", body)
+	}
+}
+
+func TestPrometheusLabelValueEscapesSpecialCharacters(t *testing.T) {
+	if got, want := prometheusLabelValue("A\\\"\nB"), `A\\\"\nB`; got != want {
+		t.Fatalf("prometheusLabelValue = %q, want %q", got, want)
+	}
+}
+
+func TestScheduledSnapshotStaleUsesMarketAwareClock(t *testing.T) {
+	now := time.Now().UTC()
+	oldObservation := now.Add(-time.Hour)
+	if !scheduledSnapshotStale(analysis.SnapshotObservation{MarketState: "regular", LastObservation: oldObservation, LastHealthyCheck: now}, now) {
+		t.Fatal("regular market should use provider observation freshness")
+	}
+	if scheduledSnapshotStale(analysis.SnapshotObservation{MarketState: "closed", LastObservation: oldObservation, LastHealthyCheck: now.Add(-time.Minute)}, now) {
+		t.Fatal("closed market should accept a recent healthy no-new-session poll")
+	}
+	if !scheduledSnapshotStale(analysis.SnapshotObservation{MarketState: "closed", LastObservation: oldObservation, LastHealthyCheck: now.Add(-3 * time.Hour)}, now) {
+		t.Fatal("closed market should become stale after the off-hours poll threshold")
+	}
+	if !scheduledSnapshotStale(analysis.SnapshotObservation{}, now) {
+		t.Fatal("missing observations should always be stale")
 	}
 }

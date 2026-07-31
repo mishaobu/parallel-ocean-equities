@@ -159,7 +159,8 @@ func (s *Store) RecordQuoteSnapshot(ticker string, snapshot model.StatisticSnaps
 // backfill and records the current observation in one locked disk save. Any
 // month already represented in persisted history is authoritative and is not
 // replaced by a historical seed. The current point still follows the normal
-// same-UTC-day rule: only a later asOf replaces an existing observation.
+// same-UTC-day rule: a later asOf replaces an existing observation, while an
+// equal-timestamp provider correction replaces only when its payload changed.
 func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.StatisticSnapshot, current model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
 	current, currentAt, err := validatedStatisticSnapshot(current)
 	if err != nil {
@@ -278,8 +279,13 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 	}
 
 	incomingDay := incomingAt.Format("2006-01-02")
-	if current, exists := byDay[incomingDay]; exists && !incomingAt.After(current.observed) {
-		return cloneStatisticSnapshots(history), false
+	if current, exists := byDay[incomingDay]; exists {
+		if incomingAt.Before(current.observed) {
+			return cloneStatisticSnapshots(history), false
+		}
+		if incomingAt.Equal(current.observed) && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
+			return cloneStatisticSnapshots(history), false
+		}
 	}
 	byDay[incomingDay] = datedStatisticSnapshot{snapshot: incoming, observed: incomingAt}
 

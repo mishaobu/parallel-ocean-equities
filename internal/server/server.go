@@ -382,6 +382,7 @@ func (s *Server) handleInternalRefresh(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	state := s.service.Snapshot()
 	stats := s.service.Stats()
+	now := time.Now().UTC()
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	fmt.Fprintf(w, "# HELP equities_watchlist_size Number of tracked tickers.\n")
 	fmt.Fprintf(w, "# TYPE equities_watchlist_size gauge\n")
@@ -401,6 +402,129 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP equities_macro_refresh_failures_total Failed macro refresh attempts.\n")
 	fmt.Fprintf(w, "# TYPE equities_macro_refresh_failures_total counter\n")
 	fmt.Fprintf(w, "equities_macro_refresh_failures_total %d\n", stats.MacroFailures)
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_scheduler_running Whether the scheduled quote snapshot loop is running.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_scheduler_running gauge\n")
+	fmt.Fprintf(w, "equities_scheduled_snapshot_scheduler_running %d\n", boolGauge(stats.SnapshotSchedulerRunning))
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_inflight Scheduled quote snapshot attempts currently in flight.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_inflight gauge\n")
+	fmt.Fprintf(w, "equities_scheduled_snapshot_inflight %d\n", stats.ScheduledSnapshotInFlight)
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_attempts_total Scheduled quote snapshot attempts.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_attempts_total counter\n")
+	fmt.Fprintf(w, "equities_scheduled_snapshot_attempts_total %d\n", stats.ScheduledSnapshotAttempts)
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_successes_total Scheduled quote snapshots containing a newer market observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_successes_total counter\n")
+	fmt.Fprintf(w, "equities_scheduled_snapshot_successes_total %d\n", stats.ScheduledSnapshotSuccesses)
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_no_new_session_total Successful scheduled quote polls with no newer provider observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_no_new_session_total counter\n")
+	fmt.Fprintf(w, "equities_scheduled_snapshot_no_new_session_total %d\n", stats.ScheduledSnapshotNoNewSession)
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_failures_total Failed scheduled quote snapshots by bounded reason.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_failures_total counter\n")
+	for _, reason := range scheduledSnapshotFailureReasons() {
+		fmt.Fprintf(w, "equities_scheduled_snapshot_failures_total{reason=\"%s\"} %d\n", prometheusLabelValue(reason), stats.ScheduledSnapshotFailures[reason])
+	}
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_history_refresh_failures_total Degraded long-history refreshes by bounded reason, including stale-cache fallbacks.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_refresh_failures_total counter\n")
+	for _, reason := range scheduledSnapshotFailureReasons() {
+		fmt.Fprintf(w, "equities_scheduled_snapshot_history_refresh_failures_total{reason=\"%s\"} %d\n", prometheusLabelValue(reason), stats.HistoryRefreshFailures[reason])
+	}
+
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_last_success_timestamp_seconds Unix timestamp of the last newer scheduled quote observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_last_success_timestamp_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_last_observation_timestamp_seconds Provider timestamp of the latest scheduled quote observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_last_observation_timestamp_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_last_healthy_check_timestamp_seconds Unix timestamp of the last successful scheduled poll, including no-new-session polls.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_last_healthy_check_timestamp_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_stale Whether a ticker is stale at its market-state-aware threshold.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_stale gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_quote_fields_present Number of expected quote fields present in the latest scheduled observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_quote_fields_present gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_quote_fields_expected Backend-defined expected quote field count.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_quote_fields_expected gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_quote_field_coverage_ratio Ratio of expected quote fields present in the latest scheduled observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_quote_field_coverage_ratio gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_history_cache_status Whether the latest scheduled observation used each bounded long-history cache state.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_cache_status gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_history_cache_timestamp_seconds Unix timestamp of the long-history cache entry used by the latest observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_cache_timestamp_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_history_cache_age_seconds Age of the long-history cache entry used by the latest observation.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_cache_age_seconds gauge\n")
+
+	tickers := make([]string, 0, len(state.Tickers))
+	for ticker := range state.Tickers {
+		tickers = append(tickers, ticker)
+	}
+	sort.Strings(tickers)
+	for _, ticker := range tickers {
+		observation := stats.ScheduledSnapshotObservations[ticker]
+		marketState := observation.MarketState
+		if marketState == "" {
+			marketState = "unknown"
+		}
+		label := prometheusLabelValue(ticker)
+		fmt.Fprintf(w, "equities_scheduled_snapshot_last_success_timestamp_seconds{ticker=\"%s\"} %.0f\n", label, prometheusTimestamp(observation.LastSuccess))
+		fmt.Fprintf(w, "equities_scheduled_snapshot_last_observation_timestamp_seconds{ticker=\"%s\"} %.0f\n", label, prometheusTimestamp(observation.LastObservation))
+		fmt.Fprintf(w, "equities_scheduled_snapshot_last_healthy_check_timestamp_seconds{ticker=\"%s\"} %.0f\n", label, prometheusTimestamp(observation.LastHealthyCheck))
+		fmt.Fprintf(w, "equities_scheduled_snapshot_stale{ticker=\"%s\",market_state=\"%s\"} %d\n", label, prometheusLabelValue(marketState), boolGauge(scheduledSnapshotStale(observation, now)))
+		fmt.Fprintf(w, "equities_scheduled_snapshot_quote_fields_present{ticker=\"%s\"} %d\n", label, observation.QuoteFieldsPresent)
+		fmt.Fprintf(w, "equities_scheduled_snapshot_quote_fields_expected{ticker=\"%s\"} %d\n", label, stats.ScheduledQuoteFieldsExpected)
+		coverage := 0.0
+		if stats.ScheduledQuoteFieldsExpected > 0 {
+			coverage = float64(observation.QuoteFieldsPresent) / float64(stats.ScheduledQuoteFieldsExpected)
+		}
+		fmt.Fprintf(w, "equities_scheduled_snapshot_quote_field_coverage_ratio{ticker=\"%s\"} %g\n", label, coverage)
+		historyStatus := observation.HistoryCacheStatus
+		if historyStatus == "" {
+			historyStatus = "unavailable"
+		}
+		for _, status := range []string{"fresh", "stale", "unavailable"} {
+			fmt.Fprintf(w, "equities_scheduled_snapshot_history_cache_status{ticker=\"%s\",status=\"%s\"} %d\n", label, status, boolGauge(historyStatus == status))
+		}
+		fmt.Fprintf(w, "equities_scheduled_snapshot_history_cache_timestamp_seconds{ticker=\"%s\"} %.0f\n", label, prometheusTimestamp(observation.HistoryCacheAsOf))
+		fmt.Fprintf(w, "equities_scheduled_snapshot_history_cache_age_seconds{ticker=\"%s\"} %.0f\n", label, prometheusAge(observation.HistoryCacheAsOf, now))
+	}
+}
+
+func scheduledSnapshotFailureReasons() []string {
+	return []string{
+		analysis.SnapshotFailureThrottled,
+		analysis.SnapshotFailureTimeout,
+		analysis.SnapshotFailureUpstream,
+		analysis.SnapshotFailurePersist,
+		analysis.SnapshotFailureOther,
+	}
+}
+
+func prometheusTimestamp(value time.Time) float64 {
+	if value.IsZero() {
+		return 0
+	}
+	return float64(value.UnixNano()) / float64(time.Second)
+}
+
+func prometheusAge(value, now time.Time) float64 {
+	if value.IsZero() || value.After(now) {
+		return 0
+	}
+	return now.Sub(value).Seconds()
+}
+
+func scheduledSnapshotStale(observation analysis.SnapshotObservation, now time.Time) bool {
+	if observation.LastObservation.IsZero() {
+		return true
+	}
+	basis := observation.LastObservation
+	threshold := 20 * time.Minute
+	if observation.MarketState != "regular" {
+		basis = observation.LastHealthyCheck
+		threshold = 150 * time.Minute
+	}
+	return basis.IsZero() || now.Sub(basis) > threshold
+}
+
+func prometheusLabelValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
 func boolGauge(value bool) int {

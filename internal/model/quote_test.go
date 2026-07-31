@@ -79,3 +79,21 @@ func TestNewStatisticSnapshotOmitsAbsentValues(t *testing.T) {
 		t.Fatalf("empty values should remain omitted: %+v", snapshot)
 	}
 }
+
+func TestStatisticSnapshotContentEqualTreatsNilAndEmptyMapsEqually(t *testing.T) {
+	left := StatisticSnapshot{AsOf: "2026-07-31T15:30:00Z", Source: "fixture"}
+	right := StatisticSnapshot{
+		AsOf:    "2026-07-31T11:30:00-04:00",
+		Source:  "fixture",
+		Numeric: map[string]float64{},
+		Text:    map[string]string{},
+		Sources: map[string]string{},
+	}
+	if !StatisticSnapshotContentEqual(left, right) {
+		t.Fatal("timestamp formatting and nil/empty maps should not change matched snapshot content")
+	}
+	right.Numeric["price"] = 101
+	if StatisticSnapshotContentEqual(left, right) {
+		t.Fatal("numeric correction was treated as identical content")
+	}
+}
