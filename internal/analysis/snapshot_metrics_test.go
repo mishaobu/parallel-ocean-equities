@@ -54,11 +54,14 @@ func TestScheduledQuoteRecordsCoverageFailuresAndNoNewSession(t *testing.T) {
 	if !first.SnapshotSchedulerRunning || first.ScheduledSnapshotAttempts != 1 || first.ScheduledSnapshotSuccesses != 1 || first.ScheduledSnapshotNoNewSession != 0 || first.ScheduledSnapshotInFlight != 0 {
 		t.Fatalf("unexpected first counters: %+v", first)
 	}
-	if observation.MarketState != "regular" || observation.QuoteFieldsPresent != expectedScheduledQuoteFieldCount || !observation.LastObservation.Equal(observedAt) || !observation.HistoryCacheAsOf.Equal(cachedAt) || observation.HistoryCacheStatus != "stale" {
+	if observation.MarketState != "regular" || observation.QuoteFieldsPresent != expectedScheduledQuoteFieldCount || !observation.LastObservation.Equal(observedAt) || !observation.HistoryCacheAsOf.Equal(cachedAt) || observation.HistoryCacheStatus != "stale" || observation.BenchmarkHistoryCacheStatus != "stale" || !observation.BenchmarkHistoryCacheAsOf.Equal(cachedAt) {
 		t.Fatalf("unexpected first observation: %+v", observation)
 	}
 	if first.HistoryRefreshFailures[SnapshotFailureThrottled] != 1 {
 		t.Fatalf("history throttling was not counted: %+v", first.HistoryRefreshFailures)
+	}
+	if first.BenchmarkHistoryRefreshFailures[SnapshotFailureUpstream] != 1 {
+		t.Fatalf("benchmark history failure was not counted separately: %+v", first.BenchmarkHistoryRefreshFailures)
 	}
 	versionAfterFirst := service.Snapshot().Version
 	lastSuccess := observation.LastSuccess
@@ -67,6 +70,7 @@ func TestScheduledQuoteRecordsCoverageFailuresAndNoNewSession(t *testing.T) {
 	// new observation nor a durable store mutation.
 	analyzer.mu.Lock()
 	analyzer.quote.HistoryRefreshFailed = false
+	analyzer.quote.BenchmarkHistoryRefreshFailed = false
 	analyzer.mu.Unlock()
 	time.Sleep(time.Millisecond)
 	if _, err := service.ScheduledQuote(context.Background(), "AMZN"); err != nil {
@@ -124,6 +128,47 @@ func TestScheduledSnapshotFailureClassificationIsBounded(t *testing.T) {
 	}
 	if got := normalizeFailureKind("raw provider detail"); got != SnapshotFailureOther {
 		t.Fatalf("unbounded failure kind normalized to %q", got)
+	}
+}
+
+func TestScheduledBenchmarkFailureCountsSharedRefreshAttemptOnce(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := completeScheduledQuote(time.Now().UTC().Truncate(time.Second), time.Time{})
+	quote.HistoryRefreshFailed = false
+	quote.BenchmarkHistoryRefreshFailureID = "shared-spy-refresh-1"
+	analyzer := &snapshotMetricsAnalyzer{quote: quote}
+	service := NewService(state, analyzer).WithQuoteTTL(0)
+
+	for _, ticker := range []string{"AMZN", "MSFT"} {
+		if _, err := service.ScheduledQuote(context.Background(), ticker); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := service.Stats().BenchmarkHistoryRefreshFailures[SnapshotFailureUpstream]; got != 1 {
+		t.Fatalf("one coalesced benchmark failure counted %d times", got)
+	}
+
+	analyzer.mu.Lock()
+	analyzer.quote.BenchmarkHistoryRefreshFailureID = "shared-spy-refresh-2"
+	analyzer.mu.Unlock()
+	if _, err := service.ScheduledQuote(context.Background(), "GOOGL"); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.Stats().BenchmarkHistoryRefreshFailures[SnapshotFailureUpstream]; got != 2 {
+		t.Fatalf("distinct benchmark refresh failure was not counted: %d", got)
+	}
+
+	service.mu.Lock()
+	for index := 0; index < benchmarkFailureDedupeLimit+5; index++ {
+		service.recordBenchmarkHistoryFailureLocked(fmt.Sprintf("bounded-%d", index), SnapshotFailureUpstream)
+	}
+	retained := len(service.benchmarkFailureIDs)
+	service.mu.Unlock()
+	if retained != benchmarkFailureDedupeLimit {
+		t.Fatalf("benchmark failure dedupe retained %d IDs, want %d", retained, benchmarkFailureDedupeLimit)
 	}
 }
 
@@ -194,30 +239,34 @@ func TestScheduledQuoteTreatsRequestTimeFallbackAsNoNewSession(t *testing.T) {
 func completeScheduledQuote(observedAt, cachedAt time.Time) model.LiveQuote {
 	value := func(number float64) *float64 { return &number }
 	quote := model.LiveQuote{
-		Ticker:                    "AMZN",
-		Price:                     value(210),
-		PreviousClose:             value(209),
-		Change:                    value(1),
-		ChangePercent:             value(1.0 / 209),
-		AsOf:                      observedAt.Format(time.RFC3339),
-		MarketState:               "REGULAR",
-		Currency:                  "USD",
-		Exchange:                  "NasdaqGS",
-		Source:                    "fixture",
-		FieldSources:              map[string]string{"asOf": "fixture provider timestamp"},
-		Change52Week:              value(0.2),
-		High52Week:                value(220),
-		Low52Week:                 value(150),
-		MovingAverage50Day:        value(205),
-		MovingAverage200Day:       value(190),
-		AverageVolume3Month:       value(40_000_000),
-		AverageVolume10Day:        value(35_000_000),
-		HistoryCacheStatus:        "stale",
-		HistoryRefreshFailureKind: SnapshotFailureThrottled,
-		HistoryRefreshFailed:      true,
+		Ticker:                             "AMZN",
+		Price:                              value(210),
+		PreviousClose:                      value(209),
+		Change:                             value(1),
+		ChangePercent:                      value(1.0 / 209),
+		AsOf:                               observedAt.Format(time.RFC3339),
+		MarketState:                        "REGULAR",
+		Currency:                           "USD",
+		Exchange:                           "NasdaqGS",
+		Source:                             "fixture",
+		FieldSources:                       map[string]string{"asOf": "fixture provider timestamp"},
+		Change52Week:                       value(0.2),
+		High52Week:                         value(220),
+		Low52Week:                          value(150),
+		MovingAverage50Day:                 value(205),
+		MovingAverage200Day:                value(190),
+		AverageVolume3Month:                value(40_000_000),
+		AverageVolume10Day:                 value(35_000_000),
+		HistoryCacheStatus:                 "stale",
+		HistoryRefreshFailureKind:          SnapshotFailureThrottled,
+		HistoryRefreshFailed:               true,
+		BenchmarkHistoryCacheStatus:        "stale",
+		BenchmarkHistoryRefreshFailureKind: SnapshotFailureUpstream,
+		BenchmarkHistoryRefreshFailed:      true,
 	}
 	if !cachedAt.IsZero() {
 		quote.HistoryCacheAsOf = cachedAt.Format(time.RFC3339)
+		quote.BenchmarkHistoryCacheAsOf = cachedAt.Format(time.RFC3339)
 	}
 	return quote
 }

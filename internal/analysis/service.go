@@ -23,7 +23,11 @@ var (
 	ErrQuotePersistence = errors.New("live quote persistence failed")
 )
 
-const defaultQuoteRequestTimeout = 20 * time.Second
+const (
+	defaultQuoteRequestTimeout = 20 * time.Second
+	defaultMacroRetryDelay     = 5 * time.Minute
+	maximumQuoteFutureSkew     = 5 * time.Minute
+)
 
 type Analyzer interface {
 	Analyze(context.Context, string, *model.Equity) (*model.Equity, error)
@@ -51,15 +55,22 @@ type Stats struct {
 	MacroLastRefresh time.Time `json:"macroLastRefresh,omitempty"`
 	MacroFailures    int64     `json:"macroFailures"`
 
-	SnapshotSchedulerRunning      bool                           `json:"snapshotSchedulerRunning"`
-	ScheduledSnapshotInFlight     int                            `json:"scheduledSnapshotInFlight"`
-	ScheduledSnapshotAttempts     int64                          `json:"scheduledSnapshotAttempts"`
-	ScheduledSnapshotSuccesses    int64                          `json:"scheduledSnapshotSuccesses"`
-	ScheduledSnapshotNoNewSession int64                          `json:"scheduledSnapshotNoNewSession"`
-	ScheduledSnapshotFailures     map[string]int64               `json:"scheduledSnapshotFailures"`
-	HistoryRefreshFailures        map[string]int64               `json:"historyRefreshFailures"`
-	ScheduledQuoteFieldsExpected  int                            `json:"scheduledQuoteFieldsExpected"`
-	ScheduledSnapshotObservations map[string]SnapshotObservation `json:"scheduledSnapshotObservations"`
+	SnapshotSchedulerRunning        bool                           `json:"snapshotSchedulerRunning"`
+	ScheduledSnapshotInFlight       int                            `json:"scheduledSnapshotInFlight"`
+	ScheduledSnapshotAttempts       int64                          `json:"scheduledSnapshotAttempts"`
+	ScheduledSnapshotSuccesses      int64                          `json:"scheduledSnapshotSuccesses"`
+	ScheduledSnapshotNoNewSession   int64                          `json:"scheduledSnapshotNoNewSession"`
+	ScheduledSnapshotFailures       map[string]int64               `json:"scheduledSnapshotFailures"`
+	HistoryRefreshFailures          map[string]int64               `json:"historyRefreshFailures"`
+	BenchmarkHistoryRefreshFailures map[string]int64               `json:"benchmarkHistoryRefreshFailures"`
+	ScheduledQuoteFieldsExpected    int                            `json:"scheduledQuoteFieldsExpected"`
+	ScheduledSnapshotObservations   map[string]SnapshotObservation `json:"scheduledSnapshotObservations"`
+}
+
+type Health struct {
+	TickerCount  int       `json:"tickerCount"`
+	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
+	ShuttingDown bool      `json:"shuttingDown"`
 }
 
 type cachedQuote struct {
@@ -74,42 +85,55 @@ type quoteCall struct {
 }
 
 type Service struct {
-	store            *store.Store
-	analyzer         Analyzer
-	queue            chan string
-	macro            MacroAnalyzer
-	macroQueue       chan struct{}
-	quoteTTL         time.Duration
-	quoteTimeout     time.Duration
-	quoteCache       map[string]cachedQuote
-	quoteCalls       map[string]*quoteCall
-	quotePersistedAt map[string]time.Time
-	quoteFinalizeMu  sync.Mutex
-	snapshotMetrics  scheduledSnapshotMetrics
+	store                 *store.Store
+	analyzer              Analyzer
+	queue                 chan string
+	macro                 MacroAnalyzer
+	macroQueue            chan struct{}
+	quoteTTL              time.Duration
+	quoteTimeout          time.Duration
+	quoteCache            map[string]cachedQuote
+	quoteCalls            map[string]*quoteCall
+	quotePersistedAt      map[string]time.Time
+	quoteFinalizeMu       sync.Mutex
+	quoteWG               sync.WaitGroup
+	workerWG              sync.WaitGroup
+	snapshotMetrics       scheduledSnapshotMetrics
+	benchmarkFailureIDs   map[string]struct{}
+	benchmarkFailureOrder []string
 
-	mu            sync.Mutex
-	inflight      map[string]struct{}
-	macroInflight bool
-	last          time.Time
-	macroLast     time.Time
-	total         atomic.Int64
-	failures      atomic.Int64
-	macroFailures atomic.Int64
+	mu                   sync.Mutex
+	inflight             map[string]struct{}
+	macroInflight        bool
+	macroRetryScheduled  bool
+	macroRetryGeneration uint64
+	lifecycleCtx         context.Context
+	lifecycleCancel      context.CancelFunc
+	shuttingDown         bool
+	last                 time.Time
+	macroLast            time.Time
+	total                atomic.Int64
+	failures             atomic.Int64
+	macroFailures        atomic.Int64
 }
 
 func NewService(state *store.Store, analyzer Analyzer) *Service {
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	service := &Service{
-		store:            state,
-		analyzer:         analyzer,
-		queue:            make(chan string, 64),
-		macroQueue:       make(chan struct{}, 1),
-		quoteTTL:         time.Minute,
-		quoteTimeout:     defaultQuoteRequestTimeout,
-		quoteCache:       make(map[string]cachedQuote),
-		quoteCalls:       make(map[string]*quoteCall),
-		quotePersistedAt: make(map[string]time.Time),
-		snapshotMetrics:  newScheduledSnapshotMetrics(),
-		inflight:         make(map[string]struct{}),
+		store:               state,
+		analyzer:            analyzer,
+		queue:               make(chan string, 64),
+		macroQueue:          make(chan struct{}, 1),
+		quoteTTL:            time.Minute,
+		quoteTimeout:        defaultQuoteRequestTimeout,
+		quoteCache:          make(map[string]cachedQuote),
+		quoteCalls:          make(map[string]*quoteCall),
+		quotePersistedAt:    make(map[string]time.Time),
+		lifecycleCtx:        lifecycleCtx,
+		lifecycleCancel:     lifecycleCancel,
+		snapshotMetrics:     newScheduledSnapshotMetrics(),
+		benchmarkFailureIDs: make(map[string]struct{}),
+		inflight:            make(map[string]struct{}),
 	}
 	service.seedScheduledSnapshotObservations()
 	return service
@@ -148,11 +172,32 @@ func (s *Service) Start(ctx context.Context, workers int) {
 	if workers < 1 {
 		workers = 1
 	}
+	runCtx, runCancel := context.WithCancel(ctx)
+	s.mu.Lock()
+	previousCancel := s.lifecycleCancel
+	s.lifecycleCtx = runCtx
+	s.lifecycleCancel = runCancel
+	s.shuttingDown = false
+	workerCount := workers
+	if s.macro != nil {
+		workerCount++
+	}
+	// Register every worker before shutdown can observe the new lifecycle. This
+	// keeps Add ordered before Wait even under an immediate termination signal.
+	s.workerWG.Add(workerCount)
+	s.mu.Unlock()
+	previousCancel()
 	for range workers {
-		go s.worker(ctx)
+		go func() {
+			defer s.workerWG.Done()
+			s.worker(runCtx)
+		}()
 	}
 	if s.macro != nil {
-		go s.macroWorker(ctx)
+		go func() {
+			defer s.workerWG.Done()
+			s.macroWorker(runCtx)
+		}()
 	}
 }
 
@@ -236,10 +281,18 @@ func (s *Service) Quote(ctx context.Context, ticker string) (model.LiveQuote, er
 		}
 	}
 	call := &quoteCall{done: make(chan struct{})}
+	if s.shuttingDown {
+		s.mu.Unlock()
+		return model.LiveQuote{}, context.Canceled
+	}
 	s.quoteCalls[ticker] = call
+	s.quoteWG.Add(1)
 	s.mu.Unlock()
 
-	go s.executeQuoteCall(ticker, call, quoter, existing)
+	go func() {
+		defer s.quoteWG.Done()
+		s.executeQuoteCall(ticker, call, quoter, existing)
+	}()
 	select {
 	case <-ctx.Done():
 		return model.LiveQuote{}, ctx.Err()
@@ -264,14 +317,20 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 	}()
 	// The shared request outlives any one HTTP caller. Each waiter still observes
 	// its own context while the provider work is bounded independently.
-	quoteCtx, cancel := context.WithTimeout(context.Background(), s.quoteRequestTimeout())
+	quoteCtx, cancel := context.WithTimeout(s.quoteLifecycleContext(), s.quoteRequestTimeout())
 	defer cancel()
 	quote, quoteErr = quoter.Quote(quoteCtx, ticker, existing)
 	if quoteErr != nil {
 		quoteErr = fmt.Errorf("%w: %w", ErrQuoteUpstream, quoteErr)
 		return
 	}
-	if observedAt, parseErr := time.Parse(time.RFC3339Nano, quote.AsOf); parseErr == nil && observedAt.After(time.Now().UTC().Add(5*time.Minute)) {
+	observedAt, parseErr := time.Parse(time.RFC3339Nano, quote.AsOf)
+	if parseErr != nil {
+		quote = model.LiveQuote{}
+		quoteErr = fmt.Errorf("%w: provider timestamp is not RFC3339", ErrQuoteUpstream)
+		return
+	}
+	if observedAt.After(time.Now().UTC().Add(maximumQuoteFutureSkew)) {
 		quote = model.LiveQuote{}
 		quoteErr = fmt.Errorf("%w: provider timestamp exceeds allowed future skew", ErrQuoteUpstream)
 		return
@@ -303,6 +362,40 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 	}
 }
 
+func (s *Service) quoteLifecycleContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lifecycleCtx
+}
+
+// Shutdown prevents new shared provider calls, cancels the service-owned child
+// lifecycle, and waits for every registered worker and quote finalizer.
+func (s *Service) BeginShutdown() {
+	s.mu.Lock()
+	s.shuttingDown = true
+	s.macroRetryScheduled = false
+	s.macroRetryGeneration++
+	cancel := s.lifecycleCancel
+	s.mu.Unlock()
+	cancel()
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.BeginShutdown()
+	done := make(chan struct{})
+	go func() {
+		s.quoteWG.Wait()
+		s.workerWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *Service) quoteRequestTimeout() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -310,30 +403,40 @@ func (s *Service) quoteRequestTimeout() time.Duration {
 }
 
 func quoteObservationNeedsPersistence(history []model.StatisticSnapshot, quote model.LiveQuote) bool {
-	if !quoteHasProviderObservation(quote) {
+	now := time.Now().UTC()
+	if !quoteHasProviderObservationAt(quote, now) {
 		return false
 	}
 	observedAt, _ := time.Parse(time.RFC3339Nano, quote.AsOf)
 	candidate := model.NewStatisticSnapshot(quote)
-	for index := len(history) - 1; index >= 0; index-- {
+	latestIndex := -1
+	var latestAt time.Time
+	for index := range history {
 		priorAt, parseErr := time.Parse(time.RFC3339Nano, history[index].AsOf)
-		if parseErr == nil {
-			switch {
-			case observedAt.After(priorAt):
-				return true
-			case observedAt.Before(priorAt):
-				return false
-			default:
-				// Closing values and filing-enriched market values can be
-				// corrected without changing the provider market timestamp.
-				return !model.StatisticSnapshotContentEqual(history[index], candidate)
-			}
+		if parseErr != nil || priorAt.After(now.Add(maximumQuoteFutureSkew)) {
+			continue
+		}
+		if latestIndex < 0 || priorAt.After(latestAt) || priorAt.Equal(latestAt) && index > latestIndex {
+			latestIndex = index
+			latestAt = priorAt
 		}
 	}
-	return true
+	if latestIndex < 0 || observedAt.After(latestAt) {
+		return true
+	}
+	if observedAt.Before(latestAt) {
+		return false
+	}
+	// Closing values and filing-enriched market values can be corrected without
+	// changing the provider market timestamp.
+	return !model.StatisticSnapshotContentEqual(history[latestIndex], candidate)
 }
 
 func quoteHasProviderObservation(quote model.LiveQuote) bool {
+	return quoteHasProviderObservationAt(quote, time.Now().UTC())
+}
+
+func quoteHasProviderObservationAt(quote model.LiveQuote, now time.Time) bool {
 	// A request-time fallback is useful for serving a current response but is
 	// not evidence of a new provider market observation and must not create a
 	// durable time-series point or scheduled-snapshot success.
@@ -341,7 +444,7 @@ func quoteHasProviderObservation(quote model.LiveQuote) bool {
 		return false
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, quote.AsOf)
-	return err == nil && !observedAt.After(time.Now().UTC().Add(5*time.Minute))
+	return err == nil && !observedAt.After(now.Add(maximumQuoteFutureSkew))
 }
 
 const quotePersistenceInterval = 15 * time.Minute
@@ -430,6 +533,14 @@ func (s *Service) Snapshot() model.State {
 	return s.store.Snapshot()
 }
 
+func (s *Service) Health() Health {
+	tickerCount, updatedAt := s.store.Metadata()
+	s.mu.Lock()
+	shuttingDown := s.shuttingDown
+	s.mu.Unlock()
+	return Health{TickerCount: tickerCount, UpdatedAt: updatedAt, ShuttingDown: shuttingDown}
+}
+
 // Tickers returns the normalized watchlist without cloning the full state.
 func (s *Service) Tickers() []string {
 	return s.store.Tickers()
@@ -440,6 +551,7 @@ func (s *Service) Stats() Stats {
 	defer s.mu.Unlock()
 	snapshotFailures := cloneFailureCounts(s.snapshotMetrics.failures)
 	historyFailures := cloneFailureCounts(s.snapshotMetrics.historyRefreshFailures)
+	benchmarkHistoryFailures := cloneFailureCounts(s.snapshotMetrics.benchmarkHistoryRefreshFailures)
 	observations := make(map[string]SnapshotObservation, len(s.snapshotMetrics.observations))
 	for ticker, observation := range s.snapshotMetrics.observations {
 		observations[ticker] = observation
@@ -454,20 +566,26 @@ func (s *Service) Stats() Stats {
 		MacroLastRefresh: s.macroLast,
 		MacroFailures:    s.macroFailures.Load(),
 
-		SnapshotSchedulerRunning:      s.snapshotMetrics.schedulerRunning,
-		ScheduledSnapshotInFlight:     s.snapshotMetrics.inflight,
-		ScheduledSnapshotAttempts:     s.snapshotMetrics.attempts,
-		ScheduledSnapshotSuccesses:    s.snapshotMetrics.successes,
-		ScheduledSnapshotNoNewSession: s.snapshotMetrics.noNewSession,
-		ScheduledSnapshotFailures:     snapshotFailures,
-		HistoryRefreshFailures:        historyFailures,
-		ScheduledQuoteFieldsExpected:  expectedScheduledQuoteFieldCount,
-		ScheduledSnapshotObservations: observations,
+		SnapshotSchedulerRunning:        s.snapshotMetrics.schedulerRunning,
+		ScheduledSnapshotInFlight:       s.snapshotMetrics.inflight,
+		ScheduledSnapshotAttempts:       s.snapshotMetrics.attempts,
+		ScheduledSnapshotSuccesses:      s.snapshotMetrics.successes,
+		ScheduledSnapshotNoNewSession:   s.snapshotMetrics.noNewSession,
+		ScheduledSnapshotFailures:       snapshotFailures,
+		HistoryRefreshFailures:          historyFailures,
+		BenchmarkHistoryRefreshFailures: benchmarkHistoryFailures,
+		ScheduledQuoteFieldsExpected:    expectedScheduledQuoteFieldCount,
+		ScheduledSnapshotObservations:   observations,
 	}
 }
 
 func (s *Service) worker(ctx context.Context) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -482,6 +600,11 @@ func (s *Service) macroWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return
 		case <-s.macroQueue:
 			s.refreshMacro(ctx)
 		}
@@ -489,8 +612,10 @@ func (s *Service) macroWorker(ctx context.Context) {
 }
 
 func (s *Service) refreshMacro(parent context.Context) {
+	failed := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			failed = true
 			s.macroFailures.Add(1)
 			_ = s.store.SetMacroError(fmt.Errorf("macro analysis failed unexpectedly: %v", recovered))
 		}
@@ -498,6 +623,11 @@ func (s *Service) refreshMacro(parent context.Context) {
 		s.macroInflight = false
 		s.macroLast = time.Now().UTC()
 		s.mu.Unlock()
+		if failed {
+			s.scheduleMacroRetry(parent)
+		} else {
+			s.cancelMacroRetry()
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(parent, 8*time.Minute)
@@ -510,13 +640,52 @@ func (s *Service) refreshMacro(parent context.Context) {
 		series, err = s.macro.Analyze(ctx)
 	}
 	if err != nil {
+		failed = true
 		s.macroFailures.Add(1)
 		_ = s.store.SetMacroError(err)
 		return
 	}
 	if err := s.store.SetMacro(series); err != nil {
+		failed = true
 		s.macroFailures.Add(1)
 	}
+}
+
+func (s *Service) scheduleMacroRetry(parent context.Context) {
+	s.mu.Lock()
+	if s.shuttingDown || s.macroRetryScheduled {
+		s.mu.Unlock()
+		return
+	}
+	s.macroRetryScheduled = true
+	s.macroRetryGeneration++
+	generation := s.macroRetryGeneration
+	s.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(defaultMacroRetryDelay)
+		defer timer.Stop()
+		select {
+		case <-parent.Done():
+			return
+		case <-timer.C:
+		}
+		s.mu.Lock()
+		if s.shuttingDown || !s.macroRetryScheduled || s.macroRetryGeneration != generation {
+			s.mu.Unlock()
+			return
+		}
+		s.macroRetryScheduled = false
+		s.mu.Unlock()
+		s.QueueMacro()
+	}()
+}
+
+func (s *Service) cancelMacroRetry() {
+	s.mu.Lock()
+	s.macroRetryScheduled = false
+	s.macroRetryGeneration++
+	s.mu.Unlock()
 }
 
 func (s *Service) refresh(parent context.Context, ticker string) {
@@ -532,7 +701,11 @@ func (s *Service) refresh(parent context.Context, ticker string) {
 		s.mu.Unlock()
 	}()
 
-	_ = s.store.SetRefreshing(ticker)
+	if err := s.store.SetRefreshing(ticker); err != nil {
+		s.total.Add(1)
+		s.failures.Add(1)
+		return
+	}
 	existing, err := s.store.Get(ticker)
 	if err != nil {
 		return

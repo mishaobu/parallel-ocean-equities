@@ -26,10 +26,10 @@ export function ValuationMatrix({ equities }: { equities: Equity[] }) {
 
   return <div className="valuation-matrix-shell">
     <div className="matrix-toolbar">
-      <span>Sort basis</span>
-      <div className="segmented compact-segmented" aria-label="Current valuation sort basis">
-        <button type="button" className={sort.basis === "actual" ? "is-active" : ""} onClick={() => setSort((current) => ({ ...current, basis: "actual" }))}>LTM</button>
-        <button type="button" className={sort.basis === "forward" ? "is-active" : ""} onClick={() => setSort((current) => ({ ...current, basis: "forward" }))}>Model</button>
+			<span>Market-cap yields use diluted shares · Sort basis</span>
+			<div className="segmented compact-segmented" role="group" aria-label="Current valuation sort basis">
+				<button type="button" className={sort.basis === "actual" ? "is-active" : ""} aria-pressed={sort.basis === "actual"} onClick={() => setSort((current) => ({ ...current, basis: "actual" }))}>LTM</button>
+				<button type="button" className={sort.basis === "forward" ? "is-active" : ""} aria-pressed={sort.basis === "forward"} onClick={() => setSort((current) => ({ ...current, basis: "forward" }))}>Model</button>
       </div>
     </div>
     <div className="table-wrap valuation-matrix">

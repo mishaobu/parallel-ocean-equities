@@ -2,44 +2,45 @@ package model
 
 import "time"
 
-const StateVersion = 11
+const StateVersion = 12
 
 type AnnualPoint struct {
-	FiscalYear            int      `json:"fiscalYear"`
-	PeriodEnd             string   `json:"periodEnd,omitempty"`
-	FiledAt               string   `json:"filedAt,omitempty"`
-	RevenueB              *float64 `json:"revenueB,omitempty"`
-	GrossProfitB          *float64 `json:"grossProfitB,omitempty"`
-	EBITB                 *float64 `json:"ebitB,omitempty"`
-	DAB                   *float64 `json:"daB,omitempty"`
-	EBITDAB               *float64 `json:"ebitdaB,omitempty"`
-	OperatingCashB        *float64 `json:"operatingCashB,omitempty"`
-	CapexB                *float64 `json:"capexB,omitempty"`
-	FCFB                  *float64 `json:"fcfB,omitempty"`
-	DividendsB            *float64 `json:"dividendsB,omitempty"`
-	NetIncomeB            *float64 `json:"netIncomeB,omitempty"`
-	PretaxIncomeB         *float64 `json:"pretaxIncomeB,omitempty"`
-	IncomeTaxB            *float64 `json:"incomeTaxB,omitempty"`
-	StockCompB            *float64 `json:"stockCompB,omitempty"`
-	DilutedEPS            *float64 `json:"dilutedEps,omitempty"`
-	DilutedSharesB        *float64 `json:"dilutedSharesB,omitempty"`
-	SharesOutstandingB    *float64 `json:"sharesOutstandingB,omitempty"`
-	SharesOutstandingAsOf string   `json:"sharesOutstandingAsOf,omitempty"`
-	CashB                 *float64 `json:"cashB,omitempty"`
-	InvestmentsB          *float64 `json:"investmentsB,omitempty"`
-	DebtB                 *float64 `json:"debtB,omitempty"`
-	NetDebtB              *float64 `json:"netDebtB,omitempty"`
-	InventoryB            *float64 `json:"inventoryB,omitempty"`
-	ReceivablesB          *float64 `json:"receivablesB,omitempty"`
-	PayablesB             *float64 `json:"payablesB,omitempty"`
-	AssetsB               *float64 `json:"assetsB,omitempty"`
-	CurrentAssetsB        *float64 `json:"currentAssetsB,omitempty"`
-	LiabilitiesB          *float64 `json:"liabilitiesB,omitempty"`
-	CurrentLiabilitiesB   *float64 `json:"currentLiabilitiesB,omitempty"`
-	EquityB               *float64 `json:"equityB,omitempty"`
-	PERatio               *float64 `json:"peRatio,omitempty"`
-	Estimate              bool     `json:"estimate,omitempty"`
-	Confidence            string   `json:"confidence,omitempty"`
+	FiscalYear              int      `json:"fiscalYear"`
+	PeriodEnd               string   `json:"periodEnd,omitempty"`
+	FiledAt                 string   `json:"filedAt,omitempty"`
+	RevenueB                *float64 `json:"revenueB,omitempty"`
+	GrossProfitB            *float64 `json:"grossProfitB,omitempty"`
+	EBITB                   *float64 `json:"ebitB,omitempty"`
+	DAB                     *float64 `json:"daB,omitempty"`
+	EBITDAB                 *float64 `json:"ebitdaB,omitempty"`
+	OperatingCashB          *float64 `json:"operatingCashB,omitempty"`
+	CapexB                  *float64 `json:"capexB,omitempty"`
+	FCFB                    *float64 `json:"fcfB,omitempty"`
+	DividendsB              *float64 `json:"dividendsB,omitempty"`
+	NetIncomeB              *float64 `json:"netIncomeB,omitempty"`
+	PretaxIncomeB           *float64 `json:"pretaxIncomeB,omitempty"`
+	IncomeTaxB              *float64 `json:"incomeTaxB,omitempty"`
+	StockCompB              *float64 `json:"stockCompB,omitempty"`
+	DilutedEPS              *float64 `json:"dilutedEps,omitempty"`
+	DilutedSharesB          *float64 `json:"dilutedSharesB,omitempty"`
+	SharesOutstandingB      *float64 `json:"sharesOutstandingB,omitempty"`
+	SharesOutstandingAsOf   string   `json:"sharesOutstandingAsOf,omitempty"`
+	SharesOutstandingSource string   `json:"sharesOutstandingSource,omitempty"`
+	CashB                   *float64 `json:"cashB,omitempty"`
+	InvestmentsB            *float64 `json:"investmentsB,omitempty"`
+	DebtB                   *float64 `json:"debtB,omitempty"`
+	NetDebtB                *float64 `json:"netDebtB,omitempty"`
+	InventoryB              *float64 `json:"inventoryB,omitempty"`
+	ReceivablesB            *float64 `json:"receivablesB,omitempty"`
+	PayablesB               *float64 `json:"payablesB,omitempty"`
+	AssetsB                 *float64 `json:"assetsB,omitempty"`
+	CurrentAssetsB          *float64 `json:"currentAssetsB,omitempty"`
+	LiabilitiesB            *float64 `json:"liabilitiesB,omitempty"`
+	CurrentLiabilitiesB     *float64 `json:"currentLiabilitiesB,omitempty"`
+	EquityB                 *float64 `json:"equityB,omitempty"`
+	PERatio                 *float64 `json:"peRatio,omitempty"`
+	Estimate                bool     `json:"estimate,omitempty"`
+	Confidence              string   `json:"confidence,omitempty"`
 }
 
 type PricePoint struct {
@@ -48,44 +49,60 @@ type PricePoint struct {
 	TotalReturnClose *float64 `json:"totalReturnClose,omitempty"`
 }
 
+// HistoricalPriceBasis describes the corporate-action basis of Prices. Yahoo
+// rewrites historical closes onto the latest split basis, while SEC instant
+// share facts remain on the basis that existed when the issuer reported them.
+// Consumers may combine the two only when this coverage is complete for the
+// share-fact date and every intervening split can be applied exactly.
+type HistoricalPriceBasis struct {
+	Provider              string            `json:"provider,omitempty"`
+	Adjustment            string            `json:"adjustment,omitempty"`
+	Source                string            `json:"source,omitempty"`
+	StockSplits           []StockSplitEvent `json:"stockSplits,omitempty"`
+	SplitCoverageStart    string            `json:"splitCoverageStart,omitempty"`
+	SplitCoverageEnd      string            `json:"splitCoverageEnd,omitempty"`
+	SplitCoverageComplete bool              `json:"splitCoverageComplete"`
+}
+
 type QuarterlyPoint struct {
-	FiscalYear            int      `json:"fiscalYear"`
-	FiscalQuarter         string   `json:"fiscalQuarter"`
-	PeriodEnd             string   `json:"periodEnd"`
-	FiledAt               string   `json:"filedAt,omitempty"`
-	Accession             string   `json:"accession,omitempty"`
-	Form                  string   `json:"form,omitempty"`
-	FilingURL             string   `json:"filingUrl,omitempty"`
-	Derived               bool     `json:"derived,omitempty"`
-	RevenueB              *float64 `json:"revenueB,omitempty"`
-	GrossProfitB          *float64 `json:"grossProfitB,omitempty"`
-	EBITB                 *float64 `json:"ebitB,omitempty"`
-	DAB                   *float64 `json:"daB,omitempty"`
-	EBITDAB               *float64 `json:"ebitdaB,omitempty"`
-	NetIncomeB            *float64 `json:"netIncomeB,omitempty"`
-	PretaxIncomeB         *float64 `json:"pretaxIncomeB,omitempty"`
-	IncomeTaxB            *float64 `json:"incomeTaxB,omitempty"`
-	StockCompB            *float64 `json:"stockCompB,omitempty"`
-	OperatingCashB        *float64 `json:"operatingCashB,omitempty"`
-	CapexB                *float64 `json:"capexB,omitempty"`
-	FCFB                  *float64 `json:"fcfB,omitempty"`
-	DividendsB            *float64 `json:"dividendsB,omitempty"`
-	DilutedEPS            *float64 `json:"dilutedEps,omitempty"`
-	DilutedSharesB        *float64 `json:"dilutedSharesB,omitempty"`
-	SharesOutstandingB    *float64 `json:"sharesOutstandingB,omitempty"`
-	SharesOutstandingAsOf string   `json:"sharesOutstandingAsOf,omitempty"`
-	CashB                 *float64 `json:"cashB,omitempty"`
-	InvestmentsB          *float64 `json:"investmentsB,omitempty"`
-	DebtB                 *float64 `json:"debtB,omitempty"`
-	NetDebtB              *float64 `json:"netDebtB,omitempty"`
-	InventoryB            *float64 `json:"inventoryB,omitempty"`
-	ReceivablesB          *float64 `json:"receivablesB,omitempty"`
-	PayablesB             *float64 `json:"payablesB,omitempty"`
-	AssetsB               *float64 `json:"assetsB,omitempty"`
-	CurrentAssetsB        *float64 `json:"currentAssetsB,omitempty"`
-	LiabilitiesB          *float64 `json:"liabilitiesB,omitempty"`
-	CurrentLiabilitiesB   *float64 `json:"currentLiabilitiesB,omitempty"`
-	EquityB               *float64 `json:"equityB,omitempty"`
+	FiscalYear              int      `json:"fiscalYear"`
+	FiscalQuarter           string   `json:"fiscalQuarter"`
+	PeriodEnd               string   `json:"periodEnd"`
+	FiledAt                 string   `json:"filedAt,omitempty"`
+	Accession               string   `json:"accession,omitempty"`
+	Form                    string   `json:"form,omitempty"`
+	FilingURL               string   `json:"filingUrl,omitempty"`
+	Derived                 bool     `json:"derived,omitempty"`
+	RevenueB                *float64 `json:"revenueB,omitempty"`
+	GrossProfitB            *float64 `json:"grossProfitB,omitempty"`
+	EBITB                   *float64 `json:"ebitB,omitempty"`
+	DAB                     *float64 `json:"daB,omitempty"`
+	EBITDAB                 *float64 `json:"ebitdaB,omitempty"`
+	NetIncomeB              *float64 `json:"netIncomeB,omitempty"`
+	PretaxIncomeB           *float64 `json:"pretaxIncomeB,omitempty"`
+	IncomeTaxB              *float64 `json:"incomeTaxB,omitempty"`
+	StockCompB              *float64 `json:"stockCompB,omitempty"`
+	OperatingCashB          *float64 `json:"operatingCashB,omitempty"`
+	CapexB                  *float64 `json:"capexB,omitempty"`
+	FCFB                    *float64 `json:"fcfB,omitempty"`
+	DividendsB              *float64 `json:"dividendsB,omitempty"`
+	DilutedEPS              *float64 `json:"dilutedEps,omitempty"`
+	DilutedSharesB          *float64 `json:"dilutedSharesB,omitempty"`
+	SharesOutstandingB      *float64 `json:"sharesOutstandingB,omitempty"`
+	SharesOutstandingAsOf   string   `json:"sharesOutstandingAsOf,omitempty"`
+	SharesOutstandingSource string   `json:"sharesOutstandingSource,omitempty"`
+	CashB                   *float64 `json:"cashB,omitempty"`
+	InvestmentsB            *float64 `json:"investmentsB,omitempty"`
+	DebtB                   *float64 `json:"debtB,omitempty"`
+	NetDebtB                *float64 `json:"netDebtB,omitempty"`
+	InventoryB              *float64 `json:"inventoryB,omitempty"`
+	ReceivablesB            *float64 `json:"receivablesB,omitempty"`
+	PayablesB               *float64 `json:"payablesB,omitempty"`
+	AssetsB                 *float64 `json:"assetsB,omitempty"`
+	CurrentAssetsB          *float64 `json:"currentAssetsB,omitempty"`
+	LiabilitiesB            *float64 `json:"liabilitiesB,omitempty"`
+	CurrentLiabilitiesB     *float64 `json:"currentLiabilitiesB,omitempty"`
+	EquityB                 *float64 `json:"equityB,omitempty"`
 }
 
 type ValuationMetrics struct {
@@ -230,16 +247,21 @@ type MacroPoint struct {
 }
 
 type MacroSeries struct {
-	UpdatedAt time.Time       `json:"updatedAt,omitempty"`
-	Sources   []string        `json:"sources,omitempty"`
-	Warnings  []string        `json:"warnings,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Basis     string          `json:"basis,omitempty"`
-	Points    []MacroPoint    `json:"points,omitempty"`
-	Countries []CountrySeries `json:"countries,omitempty"`
-	Assets    []AssetSeries   `json:"assets,omitempty"`
-	Vintages  VintageSeries   `json:"vintages,omitempty"`
-	Options   OptionsSeries   `json:"options,omitempty"`
+	// UpdatedAt and LastSuccessAt identify the last successfully committed
+	// complete macro baseline. LastAttemptAt advances on both success and error,
+	// so a failed upstream request never makes cached observations look fresh.
+	UpdatedAt     time.Time       `json:"updatedAt,omitempty"`
+	LastAttemptAt time.Time       `json:"lastAttemptAt,omitempty"`
+	LastSuccessAt time.Time       `json:"lastSuccessAt,omitempty"`
+	Sources       []string        `json:"sources,omitempty"`
+	Warnings      []string        `json:"warnings,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	Basis         string          `json:"basis,omitempty"`
+	Points        []MacroPoint    `json:"points,omitempty"`
+	Countries     []CountrySeries `json:"countries,omitempty"`
+	Assets        []AssetSeries   `json:"assets,omitempty"`
+	Vintages      VintageSeries   `json:"vintages,omitempty"`
+	Options       OptionsSeries   `json:"options,omitempty"`
 }
 
 type VintagePoint struct {
@@ -387,40 +409,42 @@ type ValuationModels struct {
 }
 
 type CurrentMetrics struct {
-	Price                 *float64 `json:"price,omitempty"`
-	TTMEPS                *float64 `json:"ttmEps,omitempty"`
-	ForwardEPS            *float64 `json:"forwardEps,omitempty"`
-	TrailingPE            *float64 `json:"trailingPE,omitempty"`
-	ForwardPE             *float64 `json:"forwardPE,omitempty"`
-	Return1Y              *float64 `json:"return1Y,omitempty"`
-	Low52Week             *float64 `json:"low52Week,omitempty"`
-	High52Week            *float64 `json:"high52Week,omitempty"`
-	PriceAsOf             string   `json:"priceAsOf,omitempty"`
-	SharesOutstandingB    *float64 `json:"sharesOutstandingB,omitempty"`
-	SharesOutstandingAsOf string   `json:"sharesOutstandingAsOf,omitempty"`
+	Price                   *float64 `json:"price,omitempty"`
+	TTMEPS                  *float64 `json:"ttmEps,omitempty"`
+	ForwardEPS              *float64 `json:"forwardEps,omitempty"`
+	TrailingPE              *float64 `json:"trailingPE,omitempty"`
+	ForwardPE               *float64 `json:"forwardPE,omitempty"`
+	Return1Y                *float64 `json:"return1Y,omitempty"`
+	Low52Week               *float64 `json:"low52Week,omitempty"`
+	High52Week              *float64 `json:"high52Week,omitempty"`
+	PriceAsOf               string   `json:"priceAsOf,omitempty"`
+	SharesOutstandingB      *float64 `json:"sharesOutstandingB,omitempty"`
+	SharesOutstandingAsOf   string   `json:"sharesOutstandingAsOf,omitempty"`
+	SharesOutstandingSource string   `json:"sharesOutstandingSource,omitempty"`
 }
 
 type Equity struct {
-	Ticker         string              `json:"ticker"`
-	Company        string              `json:"company,omitempty"`
-	InstrumentType string              `json:"instrumentType,omitempty"`
-	CIK            string              `json:"cik,omitempty"`
-	Status         string              `json:"status"`
-	Error          string              `json:"error,omitempty"`
-	Warnings       []string            `json:"warnings,omitempty"`
-	UpdatedAt      time.Time           `json:"updatedAt,omitempty"`
-	Sources        []string            `json:"sources,omitempty"`
-	Annuals        []AnnualPoint       `json:"annuals"`
-	Quarterlies    []QuarterlyPoint    `json:"quarterlies,omitempty"`
-	Prices         []PricePoint        `json:"prices,omitempty"`
-	QuoteHistory   []StatisticSnapshot `json:"quoteHistory,omitempty"`
-	Current        CurrentMetrics      `json:"current"`
-	Valuation      ValuationMetrics    `json:"valuation"`
-	Forecast       ForecastModel       `json:"forecast"`
-	Models         ValuationModels     `json:"models"`
-	Valuations     []ValuationPoint    `json:"valuations,omitempty"`
-	Quality        QualityMetrics      `json:"quality"`
-	Qualities      []QualityPoint      `json:"qualities,omitempty"`
+	Ticker               string                `json:"ticker"`
+	Company              string                `json:"company,omitempty"`
+	InstrumentType       string                `json:"instrumentType,omitempty"`
+	CIK                  string                `json:"cik,omitempty"`
+	Status               string                `json:"status"`
+	Error                string                `json:"error,omitempty"`
+	Warnings             []string              `json:"warnings,omitempty"`
+	UpdatedAt            time.Time             `json:"updatedAt,omitempty"`
+	Sources              []string              `json:"sources,omitempty"`
+	Annuals              []AnnualPoint         `json:"annuals"`
+	Quarterlies          []QuarterlyPoint      `json:"quarterlies,omitempty"`
+	Prices               []PricePoint          `json:"prices,omitempty"`
+	HistoricalPriceBasis *HistoricalPriceBasis `json:"historicalPriceBasis,omitempty"`
+	QuoteHistory         []StatisticSnapshot   `json:"quoteHistory,omitempty"`
+	Current              CurrentMetrics        `json:"current"`
+	Valuation            ValuationMetrics      `json:"valuation"`
+	Forecast             ForecastModel         `json:"forecast"`
+	Models               ValuationModels       `json:"models"`
+	Valuations           []ValuationPoint      `json:"valuations,omitempty"`
+	Quality              QualityMetrics        `json:"quality"`
+	Qualities            []QualityPoint        `json:"qualities,omitempty"`
 }
 
 type State struct {

@@ -23,6 +23,7 @@ const (
 	// fields are excluded so non-dividend and international equities are not
 	// reported as incomplete by design.
 	expectedScheduledQuoteFieldCount = 16
+	benchmarkFailureDedupeLimit      = 256
 )
 
 var snapshotFailureReasons = [...]string{
@@ -37,33 +38,38 @@ var snapshotFailureReasons = [...]string{
 // background quote scheduler for one tracked ticker. MarketState and failure
 // kinds are normalized to fixed enumerations before they reach metrics.
 type SnapshotObservation struct {
-	LastAttempt               time.Time `json:"lastAttempt,omitempty"`
-	LastSuccess               time.Time `json:"lastSuccess,omitempty"`
-	LastHealthyCheck          time.Time `json:"lastHealthyCheck,omitempty"`
-	LastObservation           time.Time `json:"lastObservation,omitempty"`
-	MarketState               string    `json:"marketState,omitempty"`
-	QuoteFieldsPresent        int       `json:"quoteFieldsPresent"`
-	HistoryCacheStatus        string    `json:"historyCacheStatus,omitempty"`
-	HistoryCacheAsOf          time.Time `json:"historyCacheAsOf,omitempty"`
-	HistoryRefreshFailureKind string    `json:"historyRefreshFailureKind,omitempty"`
+	LastAttempt                        time.Time `json:"lastAttempt,omitempty"`
+	LastSuccess                        time.Time `json:"lastSuccess,omitempty"`
+	LastHealthyCheck                   time.Time `json:"lastHealthyCheck,omitempty"`
+	LastObservation                    time.Time `json:"lastObservation,omitempty"`
+	MarketState                        string    `json:"marketState,omitempty"`
+	QuoteFieldsPresent                 int       `json:"quoteFieldsPresent"`
+	HistoryCacheStatus                 string    `json:"historyCacheStatus,omitempty"`
+	HistoryCacheAsOf                   time.Time `json:"historyCacheAsOf,omitempty"`
+	HistoryRefreshFailureKind          string    `json:"historyRefreshFailureKind,omitempty"`
+	BenchmarkHistoryCacheStatus        string    `json:"benchmarkHistoryCacheStatus,omitempty"`
+	BenchmarkHistoryCacheAsOf          time.Time `json:"benchmarkHistoryCacheAsOf,omitempty"`
+	BenchmarkHistoryRefreshFailureKind string    `json:"benchmarkHistoryRefreshFailureKind,omitempty"`
 }
 
 type scheduledSnapshotMetrics struct {
-	schedulerRunning       bool
-	inflight               int
-	attempts               int64
-	successes              int64
-	noNewSession           int64
-	failures               map[string]int64
-	historyRefreshFailures map[string]int64
-	observations           map[string]SnapshotObservation
+	schedulerRunning                bool
+	inflight                        int
+	attempts                        int64
+	successes                       int64
+	noNewSession                    int64
+	failures                        map[string]int64
+	historyRefreshFailures          map[string]int64
+	benchmarkHistoryRefreshFailures map[string]int64
+	observations                    map[string]SnapshotObservation
 }
 
 func newScheduledSnapshotMetrics() scheduledSnapshotMetrics {
 	return scheduledSnapshotMetrics{
-		failures:               newFailureCounts(),
-		historyRefreshFailures: newFailureCounts(),
-		observations:           make(map[string]SnapshotObservation),
+		failures:                        newFailureCounts(),
+		historyRefreshFailures:          newFailureCounts(),
+		benchmarkHistoryRefreshFailures: newFailureCounts(),
+		observations:                    make(map[string]SnapshotObservation),
 	}
 }
 
@@ -144,6 +150,16 @@ func (s *Service) ScheduledQuote(ctx context.Context, ticker string) (model.Live
 		if quote.HistoryRefreshFailed && observation.HistoryRefreshFailureKind != "" {
 			s.snapshotMetrics.historyRefreshFailures[observation.HistoryRefreshFailureKind]++
 		}
+		observation.BenchmarkHistoryCacheStatus = normalizeHistoryCacheStatus(quote.BenchmarkHistoryCacheStatus)
+		if cachedAt, parseErr := time.Parse(time.RFC3339Nano, quote.BenchmarkHistoryCacheAsOf); parseErr == nil {
+			observation.BenchmarkHistoryCacheAsOf = cachedAt.UTC()
+		} else {
+			observation.BenchmarkHistoryCacheAsOf = time.Time{}
+		}
+		observation.BenchmarkHistoryRefreshFailureKind = normalizeFailureKind(quote.BenchmarkHistoryRefreshFailureKind)
+		if quote.BenchmarkHistoryRefreshFailed && observation.BenchmarkHistoryRefreshFailureKind != "" {
+			s.recordBenchmarkHistoryFailureLocked(quote.BenchmarkHistoryRefreshFailureID, observation.BenchmarkHistoryRefreshFailureKind)
+		}
 		s.snapshotMetrics.observations[ticker] = observation
 	}
 	if noNewSession {
@@ -155,17 +171,52 @@ func (s *Service) ScheduledQuote(ctx context.Context, ticker string) (model.Live
 	return quote, nil
 }
 
+// recordBenchmarkHistoryFailureLocked keeps the shared SPY counter at refresh-
+// attempt semantics when multiple ticker requests coalesce on the same cache
+// load. Empty IDs retain compatibility with non-Yahoo analyzers. The bounded
+// window prevents untrusted/provider-generated identifiers from growing state
+// without limit.
+func (s *Service) recordBenchmarkHistoryFailureLocked(failureID, reason string) {
+	if failureID == "" {
+		s.snapshotMetrics.benchmarkHistoryRefreshFailures[reason]++
+		return
+	}
+	if _, seen := s.benchmarkFailureIDs[failureID]; seen {
+		return
+	}
+	s.benchmarkFailureIDs[failureID] = struct{}{}
+	s.benchmarkFailureOrder = append(s.benchmarkFailureOrder, failureID)
+	if len(s.benchmarkFailureOrder) > benchmarkFailureDedupeLimit {
+		oldest := s.benchmarkFailureOrder[0]
+		delete(s.benchmarkFailureIDs, oldest)
+		s.benchmarkFailureOrder = s.benchmarkFailureOrder[1:]
+	}
+	s.snapshotMetrics.benchmarkHistoryRefreshFailures[reason]++
+}
+
 func (s *Service) seedScheduledSnapshotObservations() {
 	state := s.store.Snapshot()
+	now := time.Now().UTC()
 	for ticker, equity := range state.Tickers {
 		if equity == nil || len(equity.QuoteHistory) == 0 {
 			continue
 		}
-		latest := equity.QuoteHistory[len(equity.QuoteHistory)-1]
-		observedAt, err := time.Parse(time.RFC3339Nano, latest.AsOf)
-		if err != nil {
+		latestIndex := -1
+		var observedAt time.Time
+		for index := range equity.QuoteHistory {
+			candidateAt, err := time.Parse(time.RFC3339Nano, equity.QuoteHistory[index].AsOf)
+			if err != nil || candidateAt.After(now.Add(maximumQuoteFutureSkew)) {
+				continue
+			}
+			if latestIndex < 0 || candidateAt.After(observedAt) {
+				latestIndex = index
+				observedAt = candidateAt
+			}
+		}
+		if latestIndex < 0 {
 			continue
 		}
+		latest := equity.QuoteHistory[latestIndex]
 		observedAt = observedAt.UTC()
 		s.snapshotMetrics.observations[ticker] = SnapshotObservation{
 			LastSuccess:        observedAt,

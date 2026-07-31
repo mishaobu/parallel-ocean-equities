@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, Check, ChevronDown, CircleAlert, Info, Search, Star, Table2 } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartHeadingMeta, useChartZoom, useFittedYDomain } from "../chartInteraction";
@@ -20,6 +20,7 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
   });
   const selected = catalog.metrics.find((metric) => metric.key === selectedKey) ?? catalog.metrics[0];
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set([selected?.group ?? "Valuation measures"]));
+	const inspectorRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (!catalog.metrics.some((metric) => metric.key === selectedKey)) setSelectedKey("market-cap");
@@ -41,6 +42,7 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
     const metrics = catalog.metrics.filter((metric) => metric.group === group && (!query || `${metric.label} ${metric.description} ${metric.formula ?? ""}`.toLowerCase().includes(query)));
     return metrics.length ? [{ group, metrics }] : [];
   });
+	const resultCount = groups.reduce((count, group) => count + group.metrics.length, 0);
   const points = selected ? filterStatisticPoints(selected.points[resolution], range) : [];
   const textPoints = selected ? filterStatisticTextPoints(selected.textPoints[resolution], range) : [];
   const eventMetric = selected?.unit === "date" || selected?.unit === "text";
@@ -48,6 +50,12 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
   function choose(metric: StatisticMetric) {
     setSelectedKey(metric.key);
     setOpenGroups((current) => new Set([...current, metric.group]));
+		if (window.matchMedia?.("(max-width: 1150px)").matches) {
+			window.requestAnimationFrame(() => {
+				inspectorRef.current?.focus({ preventScroll: true });
+				inspectorRef.current?.scrollIntoView({ behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+			});
+		}
   }
 
   function toggleGroup(group: string) {
@@ -79,14 +87,16 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
       </div>
 
       <div className="statistics-workspace">
-        <aside className="statistics-catalog" aria-label="Statistics catalog">
-          <div className="statistics-search">
-            <Search size={15} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search 60+ statistics" aria-label="Search statistics" />
-            {search && <button type="button" onClick={() => setSearch("")} aria-label="Clear statistics search">Clear</button>}
-          </div>
-          {favorites.size > 0 && !query && <MetricGroup group="Pinned" metrics={catalog.metrics.filter((metric) => favorites.has(metric.key))} selectedKey={selected.key} favorites={favorites} open onChoose={choose} onToggle={() => undefined} onFavorite={toggleFavorite} />}
-          <div className="statistics-group-list">
+		<aside className="statistics-catalog" aria-label="Statistics catalog">
+			<div className="statistics-search" role="search">
+				<Search size={15} />
+				<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search 60+ statistics" aria-label="Search statistics" aria-controls="statistics-group-list" />
+				{search && <button type="button" onClick={() => setSearch("")} aria-label="Clear statistics search">Clear</button>}
+			</div>
+			<div className="statistics-search-status" role="status" aria-live="polite">{query ? `${resultCount} ${resultCount === 1 ? "result" : "results"} for “${search.trim()}”` : ""}</div>
+			{favorites.size > 0 && !query && <MetricGroup group="Pinned" metrics={catalog.metrics.filter((metric) => favorites.has(metric.key))} selectedKey={selected.key} favorites={favorites} open collapsible={false} onChoose={choose} onToggle={() => undefined} onFavorite={toggleFavorite} />}
+			{query && resultCount === 0 && <div className="statistics-no-results">No statistics match “{search.trim()}”. Try a name such as margin, volume, or moving average.</div>}
+			<div className="statistics-group-list" id="statistics-group-list">
             {groups.map(({ group, metrics }) => <MetricGroup
               key={group}
               group={group}
@@ -101,15 +111,16 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
           </div>
         </aside>
 
-        <article className="statistic-inspector">
-          <header className="statistic-inspector-header">
+		<article ref={inspectorRef} className="statistic-inspector" tabIndex={-1} aria-labelledby="statistic-inspector-heading">
+			<p className="sr-only" role="status" aria-live="polite">{selected.label} selected</p>
+			<header className="statistic-inspector-header">
             <div className="statistic-current">
               <span>{selected.group}</span>
-              <h3>{selected.label}</h3>
-              <strong>{formatStatisticValue(selected.current, selected.unit, true, selected.currency)}</strong>
-              <CurrentDelta metric={selected} points={points} />
-            </div>
-            <button type="button" className={favorites.has(selected.key) ? "favorite-button is-active" : "favorite-button"} onClick={() => toggleFavorite(selected.key)} aria-pressed={favorites.has(selected.key)} title={favorites.has(selected.key) ? "Unpin statistic" : "Pin statistic"}><Star size={16} fill={favorites.has(selected.key) ? "currentColor" : "none"} /></button>
+				<h3 id="statistic-inspector-heading">{selected.label}</h3>
+				<strong>{formatStatisticValue(selected.current, selected.unit, true, selected.currency)}</strong>
+				<CurrentDelta metric={selected} points={points} resolution={resolution} />
+			</div>
+			<button type="button" className={favorites.has(selected.key) ? "favorite-button is-active" : "favorite-button"} onClick={() => toggleFavorite(selected.key)} aria-label={`${favorites.has(selected.key) ? "Unpin" : "Pin"} ${selected.label}`} aria-pressed={favorites.has(selected.key)} title={favorites.has(selected.key) ? "Unpin statistic" : "Pin statistic"}><Star size={16} fill={favorites.has(selected.key) ? "currentColor" : "none"} /></button>
           </header>
 
           <div className="statistic-provenance">
@@ -120,13 +131,13 @@ export function StatisticsExplorer({ equity, quote, benchmark }: { equity: Equit
           </div>
 
           <div className="statistic-toolbar">
-            <div className="segmented compact-segmented" aria-label="Statistic period">
+			<div className="segmented compact-segmented" role="group" aria-label="Statistic period">
               {(["month", "quarter", "year"] as StatisticResolution[]).map((value) => <button type="button" key={value} className={resolution === value ? "is-active" : ""} onClick={() => setResolution(value)} aria-pressed={resolution === value}>{value === "month" ? "Monthly" : value === "quarter" ? "Quarterly" : "Annual"}</button>)}
             </div>
-            <div className="segmented compact-segmented stat-range" aria-label="Statistic range">
+			<div className="segmented compact-segmented stat-range" role="group" aria-label="Statistic range">
               {(["1y", "3y", "5y", "10y", "max"] as StatisticRange[]).map((value) => <button type="button" key={value} className={range === value ? "is-active" : ""} onClick={() => setRange(value)} aria-pressed={range === value}>{value.toUpperCase()}</button>)}
             </div>
-            <div className="segmented compact-segmented presentation-switch" aria-label="Statistic presentation">
+			<div className="segmented compact-segmented presentation-switch" role="group" aria-label="Statistic presentation">
               <button type="button" className={presentation === "chart" ? "is-active" : ""} onClick={() => setPresentation("chart")} aria-label="Chart only" aria-pressed={presentation === "chart"}><BarChart3 size={14} /></button>
               <button type="button" className={presentation === "split" ? "is-active" : ""} onClick={() => setPresentation("split")} aria-label="Chart and table" aria-pressed={presentation === "split"}><BarChart3 size={13} /><Table2 size={13} /></button>
               <button type="button" className={presentation === "table" ? "is-active" : ""} onClick={() => setPresentation("table")} aria-label="Table only" aria-pressed={presentation === "table"}><Table2 size={14} /></button>
@@ -178,21 +189,27 @@ function formatTextPointValue(value: string, unit: StatisticMetric["unit"]) {
   return unit === "date" ? formatDate(value) : value;
 }
 
-function MetricGroup({ group, metrics, selectedKey, favorites, open, onChoose, onToggle, onFavorite }: { group: string; metrics: StatisticMetric[]; selectedKey: string; favorites: Set<string>; open: boolean; onChoose: (metric: StatisticMetric) => void; onToggle: () => void; onFavorite: (key: string) => void }) {
+function MetricGroup({ group, metrics, selectedKey, favorites, open, collapsible = true, onChoose, onToggle, onFavorite }: { group: string; metrics: StatisticMetric[]; selectedKey: string; favorites: Set<string>; open: boolean; collapsible?: boolean; onChoose: (metric: StatisticMetric) => void; onToggle: () => void; onFavorite: (key: string) => void }) {
   if (!metrics.length) return null;
-  return <section className="statistic-group">
-    <button type="button" className="statistic-group-heading" onClick={onToggle} aria-expanded={open}>
-      <span>{group}<small>{metrics.filter((metric) => metric.current !== undefined).length}/{metrics.length}</small></span>
-      <ChevronDown size={14} />
-    </button>
-    {open && <div className="statistic-group-rows">{metrics.map((metric) => <div key={metric.key} className={metric.key === selectedKey ? "statistic-row is-selected" : "statistic-row"}>
-      <button type="button" className="statistic-row-main" onClick={() => onChoose(metric)} aria-pressed={metric.key === selectedKey}>
-        <span>{metric.label}<small>{metric.current === undefined ? "feed needed" : metric.nativeFrequency}</small></span>
+	const id = `statistic-group-${group.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+	const heading = <span>{group}<small>{metrics.filter((metric) => metric.current !== undefined).length}/{metrics.length}</small></span>;
+	return <section className="statistic-group" aria-labelledby={`${id}-heading`}>
+		{collapsible ? <button id={`${id}-heading`} type="button" className="statistic-group-heading" onClick={onToggle} aria-expanded={open} aria-controls={`${id}-rows`}>
+			{heading}<ChevronDown size={14} />
+		</button> : <div id={`${id}-heading`} className="statistic-group-heading statistic-group-heading-static">{heading}</div>}
+		{open && <div className="statistic-group-rows" id={`${id}-rows`}>{metrics.map((metric) => <div key={metric.key} className={metric.key === selectedKey ? "statistic-row is-selected" : "statistic-row"}>
+			<button type="button" className="statistic-row-main" onClick={() => onChoose(metric)} aria-current={metric.key === selectedKey ? "true" : undefined}>
+				<span>{metric.label}<small>{metricCatalogFreshnessLabel(metric)}</small></span>
         <strong>{formatStatisticValue(metric.current, metric.unit, false, metric.currency)}</strong>
       </button>
       <button type="button" className={favorites.has(metric.key) ? "statistic-row-pin is-active" : "statistic-row-pin"} onClick={() => onFavorite(metric.key)} aria-label={`${favorites.has(metric.key) ? "Unpin" : "Pin"} ${metric.label}`} aria-pressed={favorites.has(metric.key)}><Star size={12} fill={favorites.has(metric.key) ? "currentColor" : "none"} /></button>
     </div>)}</div>}
   </section>;
+}
+
+export function metricCatalogFreshnessLabel(metric: Pick<StatisticMetric, "current" | "marketSensitive" | "nativeFrequency">) {
+	if (metric.current === undefined) return "feed needed";
+	return metric.marketSensitive ? "Live snapshot" : metric.nativeFrequency;
 }
 
 function StatisticChart({ metric, points }: { metric: StatisticMetric; points: StatisticPoint[] }) {
@@ -240,11 +257,29 @@ function StatisticHistoryTable({ metric, points }: { metric: StatisticMetric; po
   </div>;
 }
 
-function CurrentDelta({ metric, points }: { metric: StatisticMetric; points: StatisticPoint[] }) {
+function CurrentDelta({ metric, points, resolution }: { metric: StatisticMetric; points: StatisticPoint[]; resolution: StatisticResolution }) {
   const current = typeof metric.current === "number" ? metric.current : undefined;
-  const prior = points[points.length - 1];
+	const prior = previousCompletedStatisticPoint(metric, points, resolution);
   if (current === undefined || !prior || Math.abs(current - prior.value) < 1e-12) return <small>{metric.marketSensitive ? "Live snapshot" : metric.nativeFrequency}</small>;
   return <small>{formatPointChange(current, prior.value, metric.unit, metric.currency)} vs {prior.label}</small>;
+}
+
+export function previousCompletedStatisticPoint(metric: Pick<StatisticMetric, "marketSensitive" | "currentAsOf">, points: StatisticPoint[], resolution: StatisticResolution): StatisticPoint | undefined {
+	if (!metric.marketSensitive || !metric.currentAsOf) return points.at(-1);
+	const currentBucket = statisticPeriodBucket(metric.currentAsOf, resolution);
+	for (let index = points.length - 1; index >= 0; index -= 1) {
+		if (statisticPeriodBucket(points[index].date, resolution) !== currentBucket) return points[index];
+	}
+	return undefined;
+}
+
+function statisticPeriodBucket(value: string, resolution: StatisticResolution): string {
+	const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+	if (Number.isNaN(date.getTime())) return value;
+	const year = date.getUTCFullYear();
+	if (resolution === "year") return String(year);
+	const month = date.getUTCMonth();
+	return resolution === "quarter" ? `${year}-Q${Math.floor(month / 3) + 1}` : `${year}-${String(month + 1).padStart(2, "0")}`;
 }
 
 function formatPointChange(current: number, previous: number | undefined, unit: StatisticMetric["unit"], currency?: string) {

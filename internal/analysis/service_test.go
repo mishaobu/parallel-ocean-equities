@@ -2,7 +2,9 @@ package analysis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -292,6 +294,53 @@ func TestServiceRejectsImplausiblyFutureQuoteTimestamp(t *testing.T) {
 	}
 }
 
+func TestServiceRecoversFromPersistedFutureQuoteTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.json")
+	now := time.Now().UTC().Truncate(time.Second)
+	validPrior := now.Add(-24 * time.Hour)
+	poisonedFuture := now.AddDate(20, 0, 0)
+	seedState := model.NewState()
+	seedState.Tickers["AMZN"] = &model.Equity{
+		Ticker: "AMZN",
+		Status: "ready",
+		QuoteHistory: []model.StatisticSnapshot{
+			{AsOf: validPrior.Format(time.RFC3339), Numeric: map[string]float64{"price": 90}},
+			{AsOf: poisonedFuture.Format(time.RFC3339), Numeric: map[string]float64{"price": 999}},
+		},
+	}
+	data, err := json.Marshal(seedState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(seed, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Open(filepath.Join(dir, "state.json"), seed, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(state, &staticQuoteAnalyzer{quote: model.LiveQuote{
+		Ticker:       "AMZN",
+		Price:        floatPtr(100),
+		AsOf:         now.Format(time.RFC3339),
+		Source:       "fixture",
+		FieldSources: map[string]string{"asOf": "fixture provider timestamp"},
+	}})
+
+	seeded := service.Stats().ScheduledSnapshotObservations["AMZN"]
+	if !seeded.LastObservation.Equal(validPrior) {
+		t.Fatalf("future row poisoned seeded freshness: %+v", seeded)
+	}
+	if _, err := service.Quote(context.Background(), "AMZN"); err != nil {
+		t.Fatal(err)
+	}
+	history := service.Snapshot().Tickers["AMZN"].QuoteHistory
+	if len(history) != 2 || history[0].AsOf != validPrior.Format(time.RFC3339) || history[1].AsOf != now.Format(time.RFC3339) {
+		t.Fatalf("valid quote did not recover poisoned history: %#v", history)
+	}
+}
+
 func TestServiceQuoteRequestTimeoutConfiguresProviderWork(t *testing.T) {
 	dir := t.TempDir()
 	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
@@ -357,6 +406,37 @@ func TestServiceCoalescesQuoteWithoutLeaderCancellationOrPanicPoisoning(t *testi
 	if panicking.calls.Load() != 2 {
 		t.Fatalf("panic left ticker call poisoned: calls=%d", panicking.calls.Load())
 	}
+}
+
+func TestServiceShutdownCancelsAndDrainsSharedQuoteWork(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &controlledQuoteAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	service := NewService(state, analyzer)
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	service.Start(rootCtx, 1)
+
+	quoteDone := make(chan error, 1)
+	go func() {
+		_, quoteErr := service.Quote(context.Background(), "AMZN")
+		quoteDone <- quoteErr
+	}()
+	<-analyzer.started
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShutdown()
+	if err := service.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("shutdown did not drain quote call: %v", err)
+	}
+	if err := <-quoteDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("provider call was not cancelled by service lifecycle: %v", err)
+	}
+	if _, err := service.Quote(context.Background(), "AMZN"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("new quote work started after shutdown: %v", err)
+	}
+	cancelRoot()
 }
 
 func TestServiceRefreshLifecycle(t *testing.T) {

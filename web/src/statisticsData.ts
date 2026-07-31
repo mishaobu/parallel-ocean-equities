@@ -65,7 +65,10 @@ interface Snapshot {
   dilutedEps?: number;
   sharesB?: number;
   shareBasisAsOf?: string;
+  shareBasisSource?: string;
   shareAdjustmentFactor?: number;
+  shareAdjustmentEvents?: string[];
+  priceBasisSource?: string;
   dilutedSharesB?: number;
   cashB?: number;
   debtB?: number;
@@ -125,13 +128,18 @@ const yahooGroups = [
 const quoteSource = "Current market snapshot";
 const filingSource = "SEC filings / point-in-time calculation";
 const vendorGap = "A licensed fundamentals or ownership feed is required for this vendor-defined statistic.";
+const exactHistoricalShareSources = new Set([
+  "SEC CompanyFacts dei:EntityCommonStockSharesOutstanding instant fact",
+  "SEC CompanyFacts us-gaap:CommonStockSharesOutstanding instant fact",
+]);
 
 export function buildStatisticsCatalog(equity: Equity, quote?: LiveQuote, benchmark?: Equity): StatisticsCatalog {
-  const quarter = alignHistoricalShareBasis(buildQuarterSnapshots(equity), equity, quote);
-  const year = alignHistoricalShareBasis(buildAnnualSnapshots(equity), equity, quote);
-  const month = buildMonthlySnapshots(equity, quarter);
-  const current = buildCurrentSnapshot(equity, quote, quarter);
-  const context: BuildContext = { equity, quote, benchmark, snapshots: { month, quarter, year }, current };
+	const activeQuote = quote?.ticker === equity.ticker ? quote : undefined;
+	const quarter = alignHistoricalShareBasis(buildQuarterSnapshots(equity), equity);
+	const year = alignHistoricalShareBasis(buildAnnualSnapshots(equity), equity);
+	const month = buildMonthlySnapshots(equity, quarter);
+	const current = buildCurrentSnapshot(equity, activeQuote, quarter);
+	const context: BuildContext = { equity, quote: activeQuote, benchmark, snapshots: { month, quarter, year }, current };
   const metrics = definitions.map((definition) => buildMetric(definition, context));
   const yahoo = metrics.filter((metric) => metric.yahoo);
   return {
@@ -150,7 +158,7 @@ function buildMetric(definition: Definition, context: BuildContext): StatisticMe
       : context.snapshots[resolution].flatMap((snapshot) => {
         const value = definition.resolve?.(snapshot);
         const source = historicalShareBasisKeys.has(definition.key) && snapshot.shareBasisAsOf
-          ? `${snapshot.source}; issuer-disclosed basic shares as of ${snapshot.shareBasisAsOf}, Yahoo split-adjusted x${snapshot.shareAdjustmentFactor ?? 1} for comparability`
+          ? historicalShareSource(snapshot)
           : snapshot.source;
         return finite(value) ? [{ date: snapshot.date, label: snapshot.label, value, basisDate: snapshot.basisDate, source }] : [];
       });
@@ -171,7 +179,7 @@ function buildMetric(definition: Definition, context: BuildContext): StatisticMe
     currentAsOf,
     currentSource: currentFieldSource(definition, context),
     marketSensitive,
-    currency: context.quote?.currency,
+		currency: equityCurrency(context.equity, context.quote),
     currentBasis: currentBasis(definition, context),
     unavailableReason: current === undefined ? definition.unavailableReason ?? "No defensible current observation is available from the configured sources." : undefined,
     points,
@@ -288,13 +296,14 @@ function currentFieldSource(definition: Definition, context: BuildContext): stri
 }
 
 function currentBasis(definition: Definition, context: BuildContext): string | undefined {
-  const price = context.quote?.price ?? context.equity.current.price;
+	const price = context.quote?.price ?? context.equity.current.price;
+	const currency = equityCurrency(context.equity, context.quote);
   const shares = exactShares(context);
   const filingDate = context.current.basisDate;
   if (definition.group === "Valuation measures" && price !== undefined) {
     if (definition.key === "market-cap" && shares !== undefined) {
       const shareDate = context.quote?.shareBasisAsOf ?? context.equity.current.sharesOutstandingAsOf;
-      return `${formatCurrencyNumber(price, context.quote?.currency, true)} × ${shares.toFixed(3)}B disclosed shares${shareDate ? ` (${shareDate})` : ""}`;
+			return `${formatCurrencyNumber(price, currency, true)} × ${shares.toFixed(3)}B disclosed shares${shareDate ? ` (${shareDate})` : ""}`;
     }
     if (definition.key === "enterprise-value") return `Live market cap + net debt${filingDate ? ` through ${filingDate}` : ""}`;
     if (definition.key === "trailing-pe") return `Live price ÷ TTM diluted EPS${filingDate ? ` through ${filingDate}` : ""}`;
@@ -455,6 +464,7 @@ function snapshotFromQuarterWindow(window: QuarterlyPoint[], latestRow: Quarterl
     dilutedEps: sumAll(window, "dilutedEps"),
     sharesB: latestRow.sharesOutstandingB,
     shareBasisAsOf: latestRow.sharesOutstandingAsOf,
+    shareBasisSource: latestRow.sharesOutstandingSource,
     dilutedSharesB: averageAll(window, "dilutedSharesB"),
     cashB: add(latestRow.cashB, latestRow.investmentsB) ?? latestRow.cashB,
     debtB: latestRow.debtB,
@@ -496,6 +506,7 @@ function snapshotFromAnnual(row: AnnualPoint, previous: AnnualPoint | undefined,
     dilutedEps: row.dilutedEps,
     sharesB: row.sharesOutstandingB,
     shareBasisAsOf: row.sharesOutstandingAsOf,
+    shareBasisSource: row.sharesOutstandingSource,
     dilutedSharesB: row.dilutedSharesB,
     cashB: add(row.cashB, row.investmentsB) ?? row.cashB,
     debtB: row.debtB,
@@ -510,18 +521,21 @@ function snapshotFromAnnual(row: AnnualPoint, previous: AnnualPoint | undefined,
   };
 }
 
-function alignHistoricalShareBasis(snapshots: Snapshot[], equity: Equity, quote?: LiveQuote): Snapshot[] {
-  const yahooPriceBasis = equity.sources?.some((source) => source.includes("Yahoo Finance monthly close and adjusted close"));
-  const splitBasis = validatedSplitBasis(quote);
+function alignHistoricalShareBasis(snapshots: Snapshot[], equity: Equity): Snapshot[] {
+  const splitBasis = validatedSplitBasis(equity);
   return snapshots.map((snapshot) => {
-    const suppressed = { ...snapshot, sharesB: undefined, shareAdjustmentFactor: undefined };
-    if (!yahooPriceBasis || !splitBasis || snapshot.sharesB === undefined || !validDate(snapshot.shareBasisAsOf)) return suppressed;
+    const suppressed = { ...snapshot, sharesB: undefined, shareAdjustmentFactor: undefined, shareAdjustmentEvents: undefined, priceBasisSource: undefined };
+    if (!splitBasis || snapshot.sharesB === undefined || !validDate(snapshot.shareBasisAsOf) || !exactHistoricalShareSources.has(snapshot.shareBasisSource ?? "")) return suppressed;
     const shareDate = snapshot.shareBasisAsOf.slice(0, 10);
-    if (shareDate < splitBasis.coverageStart || shareDate > splitBasis.quoteDate) return suppressed;
+    if (shareDate < splitBasis.coverageStart || shareDate > splitBasis.coverageEnd) return suppressed;
     let factor = 1;
+    const applied: string[] = [];
     for (const event of splitBasis.events) {
       if (event.date === shareDate) return suppressed;
-      if (event.date > shareDate) factor *= event.ratio;
+      if (event.date > shareDate) {
+        factor *= event.ratio;
+        applied.push(`${event.date} ${formatSplitRatio(event.numerator, event.denominator)}`);
+      }
       if (!Number.isFinite(factor) || factor < 1e-6 || factor > 1e6) return suppressed;
     }
     const adjusted = snapshot.sharesB * factor;
@@ -530,27 +544,37 @@ function alignHistoricalShareBasis(snapshots: Snapshot[], equity: Equity, quote?
       const ratio = adjusted / snapshot.dilutedSharesB;
       if (ratio < 0.8 || ratio > 1.25) return suppressed;
     }
-    return { ...snapshot, sharesB: adjusted, shareAdjustmentFactor: factor };
+    return { ...snapshot, sharesB: adjusted, shareAdjustmentFactor: factor, shareAdjustmentEvents: applied, priceBasisSource: splitBasis.source };
   });
 }
 
-function validatedSplitBasis(quote?: LiveQuote) {
-  if (!quote?.stockSplitCoverageComplete || !validDate(quote.stockSplitCoverageStart) || !validDate(quote.asOf)) return undefined;
-  const coverageStart = quote.stockSplitCoverageStart.slice(0, 10);
-  const quoteDate = quote.asOf.slice(0, 10);
-  if (coverageStart > quoteDate) return undefined;
-  const byDate = new Map<string, number>();
-  for (const event of quote.stockSplits ?? []) {
+function validatedSplitBasis(equity: Equity) {
+  const basis = equity.historicalPriceBasis;
+  if (basis?.provider !== "yahoo-finance" || basis.adjustment !== "split-adjusted" || !basis.splitCoverageComplete || !basis.source || !validDate(basis.splitCoverageStart) || !validDate(basis.splitCoverageEnd)) return undefined;
+  const coverageStart = basis.splitCoverageStart.slice(0, 10);
+  const coverageEnd = basis.splitCoverageEnd.slice(0, 10);
+  if (coverageStart > coverageEnd) return undefined;
+  const byDate = new Map<string, { numerator: number; denominator: number; ratio: number }>();
+  for (const event of basis.stockSplits ?? []) {
     if (!validDate(event.date) || !Number.isFinite(event.numerator) || event.numerator <= 0 || !Number.isFinite(event.denominator) || event.denominator <= 0 || !Number.isFinite(event.ratio) || event.ratio <= 0) return undefined;
     const date = event.date.slice(0, 10);
     const ratio = event.numerator / event.denominator;
-    if (date > quoteDate || Math.abs(ratio - event.ratio) > 1e-12) return undefined;
+    if (date < coverageStart || date > coverageEnd || Math.abs(ratio - event.ratio) > 1e-12) return undefined;
     const prior = byDate.get(date);
-    if (prior !== undefined && Math.abs(prior - ratio) > 1e-12) return undefined;
-    byDate.set(date, ratio);
+    if (prior !== undefined && Math.abs(prior.ratio - ratio) > 1e-12) return undefined;
+    byDate.set(date, { numerator: event.numerator, denominator: event.denominator, ratio });
   }
-  const events = [...byDate.entries()].map(([date, ratio]) => ({ date, ratio })).sort((left, right) => left.date.localeCompare(right.date));
-  return { coverageStart, quoteDate, events };
+  const events = [...byDate.entries()].map(([date, event]) => ({ date, ...event })).sort((left, right) => left.date.localeCompare(right.date));
+  return { coverageStart, coverageEnd, events, source: basis.source };
+}
+
+function historicalShareSource(snapshot: Snapshot): string {
+  const events = snapshot.shareAdjustmentEvents?.length ? `; applied ${snapshot.shareAdjustmentEvents.join(", ")}` : "; no intervening split";
+  return `${snapshot.source}; ${snapshot.shareBasisSource} as of ${snapshot.shareBasisAsOf}; ${snapshot.priceBasisSource}; shares aligned x${snapshot.shareAdjustmentFactor ?? 1}${events}`;
+}
+
+function formatSplitRatio(numerator: number, denominator: number): string {
+  return `${Number.isInteger(numerator) ? numerator : numerator.toFixed(3)}:${Number.isInteger(denominator) ? denominator : denominator.toFixed(3)}`;
 }
 
 function buildMonthlySnapshots(equity: Equity, quarters: Snapshot[]): Snapshot[] {
@@ -578,6 +602,7 @@ function buildCurrentSnapshot(equity: Equity, quote: LiveQuote | undefined, quar
     price: quote?.price ?? equity.current.price ?? basis.price,
     sharesB,
     shareBasisAsOf: quote?.shareBasisAsOf,
+    shareBasisSource: quote?.fieldSources?.sharesOutstandingB,
   };
 }
 
@@ -591,6 +616,7 @@ function balanceSnapshot(row: QuarterlyPoint, equity: Equity): Snapshot {
     price: priceOnOrBefore(prices, row.filedAt || row.periodEnd),
     sharesB: row.sharesOutstandingB,
     shareBasisAsOf: row.sharesOutstandingAsOf,
+    shareBasisSource: row.sharesOutstandingSource,
     dilutedSharesB: row.dilutedSharesB,
     cashB: add(row.cashB, row.investmentsB) ?? row.cashB,
     debtB: row.debtB,
@@ -677,7 +703,7 @@ function filterDatedPoints<T extends { date: string }>(points: T[], range: Stati
   return points.filter((point) => Date.parse(point.date) >= cutoff.getTime());
 }
 
-export function formatStatisticValue(value: number | string | undefined, unit: StatisticUnit, precise = false, currency = "USD"): string {
+export function formatStatisticValue(value: number | string | undefined, unit: StatisticUnit, precise = false, currency?: string): string {
   if (value === undefined || value === "") return "—";
   if (typeof value === "string") {
     if (unit !== "date" || !validDate(value)) return value;
@@ -697,20 +723,44 @@ export function formatStatisticValue(value: number | string | undefined, unit: S
   }
 }
 
-function formatBillions(value: number, precise: boolean, currency: string): string {
-  const absolute = Math.abs(value);
-  const symbol = currencySymbol(currency);
-  if (absolute >= 1000) return `${value < 0 ? "−" : ""}${symbol}${(absolute / 1000).toFixed(precise ? 4 : 2)}T`;
-  const digits = precise ? 4 : absolute >= 100 ? 1 : 2;
-  return `${value < 0 ? "−" : ""}${symbol}${absolute.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}B`;
+function formatBillions(value: number, precise: boolean, currency?: string): string {
+	const absolute = Math.abs(value);
+	const symbol = currency ? currencySymbol(currency) : "";
+	const qualifier = currency ? "" : " · currency n/a";
+	if (absolute >= 1000) return `${value < 0 ? "−" : ""}${symbol}${(absolute / 1000).toFixed(precise ? 4 : 2)}T${qualifier}`;
+	const digits = precise ? 4 : absolute >= 100 ? 1 : 2;
+	return `${value < 0 ? "−" : ""}${symbol}${absolute.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}B${qualifier}`;
 }
 
-function formatCurrencyNumber(value: number, currency = "USD", precise = false) {
-  try {
+
+function formatCurrencyNumber(value: number, currency?: string, precise = false) {
+	if (!currency) return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: precise ? 4 : 2 })} · currency n/a`;
+	try {
     return value.toLocaleString("en-US", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: precise ? 4 : 2 });
   } catch {
     return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: precise ? 4 : 2 })} ${currency}`;
   }
+}
+
+export function formatCurrencyValue(value: number | undefined, currency?: string): string {
+	if (value === undefined || !Number.isFinite(value)) return "—";
+	return formatCurrencyNumber(value, currency, true);
+}
+
+export function equityCurrency(equity: Equity, quote?: LiveQuote): string | undefined {
+	const live = quote?.ticker === equity.ticker ? normalizedCurrency(quote.currency) : undefined;
+	if (live) return live;
+	const history = quote?.ticker === equity.ticker && quote.history?.length ? quote.history : equity.quoteHistory;
+	for (let index = (history?.length ?? 0) - 1; index >= 0; index -= 1) {
+		const currency = normalizedCurrency(history?.[index]?.text?.currency);
+		if (currency) return currency;
+	}
+	return undefined;
+}
+
+function normalizedCurrency(value?: string): string | undefined {
+	const currency = value?.trim().toUpperCase();
+	return currency && /^[A-Z]{3}$/.test(currency) ? currency : undefined;
 }
 
 function currencySymbol(currency: string) {
@@ -779,6 +829,7 @@ function latestRolling(points: PricePoint[] | undefined, periods: number) {
 function trailingReturn(rows: PricePoint[], index: number, periods: number) {
   const previous = rows[index - periods];
   if (!previous) return undefined;
+	if (monthOrdinal(rows[index].date) - monthOrdinal(previous.date) !== periods) return undefined;
   const start = previous.close;
   const end = rows[index].close;
   return start > 0 && end > 0 ? end / start - 1 : undefined;

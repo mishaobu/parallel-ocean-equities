@@ -44,11 +44,22 @@ type LiveQuote struct {
 	// HistoryCacheStatus is one of fresh, stale, or unavailable. The latter two
 	// make degraded long-history calculations visible without exposing raw
 	// upstream errors as telemetry labels.
-	HistoryCacheStatus        string              `json:"historyCacheStatus,omitempty"`
-	HistoryCacheAsOf          string              `json:"historyCacheAsOf,omitempty"`
-	HistoryRefreshFailureKind string              `json:"historyRefreshFailureKind,omitempty"`
-	HistoryRefreshFailed      bool                `json:"historyRefreshFailed,omitempty"`
-	History                   []StatisticSnapshot `json:"history,omitempty"`
+	HistoryCacheStatus        string `json:"historyCacheStatus,omitempty"`
+	HistoryCacheAsOf          string `json:"historyCacheAsOf,omitempty"`
+	HistoryRefreshFailureKind string `json:"historyRefreshFailureKind,omitempty"`
+	HistoryRefreshFailed      bool   `json:"historyRefreshFailed,omitempty"`
+	// BenchmarkHistory* reports the independently cached SPY series used only
+	// for beta. It must not downgrade the ticker's own price/statistics history
+	// or fan one shared benchmark incident out into per-ticker target alerts.
+	BenchmarkHistoryCacheStatus        string `json:"benchmarkHistoryCacheStatus,omitempty"`
+	BenchmarkHistoryCacheAsOf          string `json:"benchmarkHistoryCacheAsOf,omitempty"`
+	BenchmarkHistoryRefreshFailureKind string `json:"benchmarkHistoryRefreshFailureKind,omitempty"`
+	BenchmarkHistoryRefreshFailed      bool   `json:"benchmarkHistoryRefreshFailed,omitempty"`
+	// BenchmarkHistoryRefreshFailureID identifies one shared cache refresh
+	// attempt for internal counter deduplication. It is deliberately not part of
+	// the public quote contract.
+	BenchmarkHistoryRefreshFailureID string              `json:"-"`
+	History                          []StatisticSnapshot `json:"history,omitempty"`
 }
 
 // StockSplitEvent is a validated Yahoo trading-effective split used to align

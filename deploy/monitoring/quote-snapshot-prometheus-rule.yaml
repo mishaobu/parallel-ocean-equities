@@ -27,6 +27,54 @@ spec:
             summary: Equities quote snapshot scheduler is not running
             description: The traffic-independent quote sampler has been stopped or absent for 10 minutes.
 
+        - alert: EquitiesMacroRefreshDegraded
+          expr: |
+            (
+              max by (namespace) (
+                equities_macro_degraded{namespace="equities"}
+              ) == 1
+            )
+            and on (namespace)
+            (
+              max by (namespace) (
+                equities_macro_last_success_timestamp_seconds{namespace="equities"}
+              ) > 0
+            )
+            and on (namespace)
+            (
+              max by (namespace) (
+                equities_macro_stale{namespace="equities"}
+              ) == 0
+            )
+          for: 15m
+          labels:
+            severity: warning
+            service: parallel-ocean-equities
+          annotations:
+            summary: Macro refresh is degraded but a usable baseline remains
+            description: The most recent macro refresh failed for 15 minutes; a prior successful baseline is still within the backend freshness limit.
+
+        - alert: EquitiesMacroBaselineUnavailableOrStale
+          expr: |
+            (
+              max by (namespace) (
+                equities_macro_last_success_timestamp_seconds{namespace="equities"}
+              ) == 0
+            )
+            or
+            (
+              max by (namespace) (
+                equities_macro_stale{namespace="equities"}
+              ) == 1
+            )
+          for: 30m
+          labels:
+            severity: critical
+            service: parallel-ocean-equities
+          annotations:
+            summary: Macro baseline is unavailable or stale
+            description: No successful macro baseline exists, or the last successful baseline has exceeded the backend freshness limit for 30 minutes.
+
         - alert: EquitiesRegularSessionQuoteStale
           expr: |
             max by (namespace, ticker) (
@@ -85,6 +133,13 @@ spec:
                   reason="throttled"
                 }[30m])
               )
+              +
+              sum by (namespace) (
+                increase(equities_scheduled_snapshot_benchmark_history_refresh_failures_total{
+                  namespace="equities",
+                  reason="throttled"
+                }[30m])
+              )
             ) > 0
           for: 5m
           labels:
@@ -96,10 +151,18 @@ spec:
 
         - alert: EquitiesQuoteHistoryRefreshDegraded
           expr: |
-            sum by (namespace) (
-              increase(equities_scheduled_snapshot_history_refresh_failures_total{
-                namespace="equities"
-              }[1h])
+            (
+              sum by (namespace) (
+                increase(equities_scheduled_snapshot_history_refresh_failures_total{
+                  namespace="equities"
+                }[1h])
+              )
+              +
+              sum by (namespace) (
+                increase(equities_scheduled_snapshot_benchmark_history_refresh_failures_total{
+                  namespace="equities"
+                }[1h])
+              )
             ) >= 3
           for: 10m
           labels:
@@ -133,7 +196,7 @@ spec:
             service: parallel-ocean-equities
           annotations:
             summary: Quote-history cache is stale for {{ $labels.ticker }}
-            description: The scheduler has used a history cache older than 36 hours for one hour.
+            description: The scheduler has used a target history cache older than 36 hours for one hour.
 
         - alert: EquitiesQuoteHistoryCacheUnavailable
           expr: |
@@ -159,7 +222,47 @@ spec:
             service: parallel-ocean-equities
           annotations:
             summary: Quote-history cache is unavailable for {{ $labels.ticker }}
-            description: Current polling is healthy, but the ten-year history cache has remained unavailable for one hour.
+            description: Current polling is healthy, but the target ten-year history cache has remained unavailable for one hour.
+
+        - alert: EquitiesBenchmarkHistoryCacheDegraded
+          expr: |
+            (
+              (
+                max by (namespace, benchmark) (
+                  equities_scheduled_snapshot_benchmark_history_cache_status{
+                    namespace="equities",
+                    benchmark="SPY",
+                    status="stale"
+                  }
+                ) == 1
+              )
+              and on (namespace, benchmark)
+              (
+                max by (namespace, benchmark) (
+                  equities_scheduled_snapshot_benchmark_history_cache_age_seconds{
+                    namespace="equities",
+                    benchmark="SPY"
+                  }
+                ) > 129600
+              )
+            )
+            or
+            (
+              max by (namespace, benchmark) (
+                equities_scheduled_snapshot_benchmark_history_cache_status{
+                  namespace="equities",
+                  benchmark="SPY",
+                  status="unavailable"
+                }
+              ) == 1
+            )
+          for: 1h
+          labels:
+            severity: warning
+            service: parallel-ocean-equities
+          annotations:
+            summary: Shared {{ $labels.benchmark }} benchmark history cache is degraded
+            description: The shared beta-benchmark cache has remained unavailable, or stale and older than 36 hours, for one hour. This single alert represents all dependent tickers.
 
         - alert: EquitiesQuoteFieldCoverageLow
           expr: |

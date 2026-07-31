@@ -93,7 +93,7 @@ func main() {
 		MonetaryStaticDir: env("MONETARY_STATIC_DIR", "/app/monetary"),
 		MacroPath:         env("MACRO_PATH", "/macro"),
 		MacroStaticDir:    env("MACRO_STATIC_DIR", "/app/macro"),
-		RefreshToken:      os.Getenv("REFRESH_TOKEN"),
+		AdminToken:        os.Getenv("ADMIN_TOKEN"),
 		Logger:            logger,
 	})
 	httpServer := &http.Server{
@@ -112,9 +112,17 @@ func main() {
 		}
 	}()
 	<-ctx.Done()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer shutdownCancel()
-	_ = httpServer.Shutdown(shutdownCtx)
+	service.BeginShutdown()
+	httpShutdownCtx, httpShutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := httpServer.Shutdown(httpShutdownCtx); err != nil {
+		logger.Error("http shutdown", "error", err)
+	}
+	httpShutdownCancel()
+	serviceShutdownCtx, serviceShutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer serviceShutdownCancel()
+	if err := service.Shutdown(serviceShutdownCtx); err != nil {
+		logger.Error("service drain", "error", err)
+	}
 }
 
 func scheduleRefresh(ctx context.Context, service *analysis.Service, interval time.Duration) {

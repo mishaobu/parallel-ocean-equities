@@ -21,6 +21,7 @@ export interface AnnualPoint {
   dilutedSharesB?: number;
   sharesOutstandingB?: number;
   sharesOutstandingAsOf?: string;
+  sharesOutstandingSource?: string;
   cashB?: number;
   investmentsB?: number;
   debtB?: number;
@@ -42,6 +43,16 @@ export interface PricePoint {
   date: string;
   close: number;
   totalReturnClose?: number;
+}
+
+export interface HistoricalPriceBasis {
+  provider?: string;
+  adjustment?: string;
+  source?: string;
+  stockSplits?: StockSplitEvent[];
+  splitCoverageStart?: string;
+  splitCoverageEnd?: string;
+  splitCoverageComplete: boolean;
 }
 
 export interface QuarterlyPoint {
@@ -70,6 +81,7 @@ export interface QuarterlyPoint {
   dilutedSharesB?: number;
   sharesOutstandingB?: number;
   sharesOutstandingAsOf?: string;
+  sharesOutstandingSource?: string;
   cashB?: number;
   investmentsB?: number;
   debtB?: number;
@@ -310,6 +322,7 @@ export interface Equity {
   annuals: AnnualPoint[];
   quarterlies?: QuarterlyPoint[];
   prices?: PricePoint[];
+  historicalPriceBasis?: HistoricalPriceBasis;
   current: CurrentMetrics;
   quoteHistory?: StatisticSnapshot[];
   valuation?: ValuationMetrics;

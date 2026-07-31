@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 
 type EquityService interface {
 	Snapshot() model.State
+	Health() analysis.Health
 	Stats() analysis.Stats
 	AddTicker(string) error
 	PreviewTicker(context.Context, string) (analysis.TickerPreview, error)
@@ -40,7 +42,7 @@ type Config struct {
 	MonetaryStaticDir string
 	MacroPath         string
 	MacroStaticDir    string
-	RefreshToken      string
+	AdminToken        string
 	Logger            *slog.Logger
 }
 
@@ -85,6 +87,8 @@ func (s *Server) routes() {
 	base := s.config.BasePath
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET "+base+"/healthz", s.handleHealth)
+	s.mux.HandleFunc("GET /readyz", s.handleReady)
+	s.mux.HandleFunc("GET "+base+"/readyz", s.handleReady)
 	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.mux.HandleFunc("POST /internal/refresh", s.handleInternalRefresh)
 	s.mux.HandleFunc("GET "+base+"/api/state", s.handleState)
@@ -122,6 +126,9 @@ func (s *Server) routes() {
 }
 
 func (s *Server) handlePreviewTicker(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	preview, err := s.service.PreviewTicker(r.Context(), r.PathValue("ticker"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
@@ -156,16 +163,22 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	state := s.service.Snapshot()
-	ready := len(state.Tickers) > 0
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]bool{"healthy": true})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	health := s.service.Health()
+	ready := health.TickerCount > 0 && !health.ShuttingDown
 	status := http.StatusOK
 	if !ready {
 		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, map[string]any{
-		"healthy":   ready,
-		"tickers":   len(state.Tickers),
-		"updatedAt": state.UpdatedAt,
+		"ready":     ready,
+		"tickers":   health.TickerCount,
+		"updatedAt": health.UpdatedAt,
 	})
 }
 
@@ -325,6 +338,9 @@ func (s *Server) handleTicker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAddTicker(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if !s.limiter.Allow(clientIP(r)) {
 		writeError(w, http.StatusTooManyRequests, "ticker-add rate limit exceeded")
 		return
@@ -349,6 +365,9 @@ func (s *Server) handleAddTicker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteTicker(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	ticker := strings.ToUpper(r.PathValue("ticker"))
 	if err := s.service.DeleteTicker(ticker); err != nil {
 		status := http.StatusBadRequest
@@ -362,6 +381,9 @@ func (s *Server) handleDeleteTicker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefreshTicker(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	ticker := strings.ToUpper(r.PathValue("ticker"))
 	if _, exists := s.service.Snapshot().Tickers[ticker]; !exists {
 		writeError(w, http.StatusNotFound, "ticker not found")
@@ -372,11 +394,32 @@ func (s *Server) handleRefreshTicker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInternalRefresh(w http.ResponseWriter, r *http.Request) {
-	if s.config.RefreshToken != "" && r.Header.Get("Authorization") != "Bearer "+s.config.RefreshToken {
-		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+	if !s.requireAdmin(w, r) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int{"queued": s.service.RefreshAll()})
+}
+
+// requireAdmin fails closed: deployments without an administrative secret keep
+// all public read paths available but cannot mutate the tracked universe or
+// trigger expensive refresh work. Constant-time comparison avoids turning the
+// bearer token check into an oracle.
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	w.Header().Set("Cache-Control", "no-store")
+	token := strings.TrimSpace(s.config.AdminToken)
+	if token == "" {
+		writeError(w, http.StatusServiceUnavailable, "administrative mutations are disabled")
+		return false
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="parallel-ocean-equities"`)
+	provided := r.Header.Get("Authorization")
+	expected := "Bearer " + token
+	if len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid administrative token")
+		return false
+	}
+	w.Header().Del("WWW-Authenticate")
+	return true
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
@@ -402,6 +445,23 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(w, "# HELP equities_macro_refresh_failures_total Failed macro refresh attempts.\n")
 	fmt.Fprintf(w, "# TYPE equities_macro_refresh_failures_total counter\n")
 	fmt.Fprintf(w, "equities_macro_refresh_failures_total %d\n", stats.MacroFailures)
+	macroLastSuccess := state.Macro.LastSuccessAt
+	if macroLastSuccess.IsZero() {
+		macroLastSuccess = state.Macro.UpdatedAt
+	}
+	fmt.Fprint(w, "# HELP equities_macro_last_success_timestamp_seconds Unix timestamp of the last successfully committed macro baseline.\n")
+	fmt.Fprint(w, "# TYPE equities_macro_last_success_timestamp_seconds gauge\n")
+	fmt.Fprintf(w, "equities_macro_last_success_timestamp_seconds %.0f\n", prometheusTimestamp(macroLastSuccess))
+	fmt.Fprint(w, "# HELP equities_macro_last_attempt_timestamp_seconds Unix timestamp of the latest macro refresh attempt.\n")
+	fmt.Fprint(w, "# TYPE equities_macro_last_attempt_timestamp_seconds gauge\n")
+	fmt.Fprintf(w, "equities_macro_last_attempt_timestamp_seconds %.0f\n", prometheusTimestamp(state.Macro.LastAttemptAt))
+	fmt.Fprint(w, "# HELP equities_macro_degraded Whether the latest macro refresh failed while cached data may still be served.\n")
+	fmt.Fprint(w, "# TYPE equities_macro_degraded gauge\n")
+	fmt.Fprintf(w, "equities_macro_degraded %d\n", boolGauge(strings.TrimSpace(state.Macro.Error) != ""))
+	macroStale := macroLastSuccess.IsZero() || now.Sub(macroLastSuccess) > 36*time.Hour
+	fmt.Fprint(w, "# HELP equities_macro_stale Whether the last successful macro baseline is absent or older than 36 hours.\n")
+	fmt.Fprint(w, "# TYPE equities_macro_stale gauge\n")
+	fmt.Fprintf(w, "equities_macro_stale %d\n", boolGauge(macroStale))
 	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_scheduler_running Whether the scheduled quote snapshot loop is running.\n")
 	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_scheduler_running gauge\n")
 	fmt.Fprintf(w, "equities_scheduled_snapshot_scheduler_running %d\n", boolGauge(stats.SnapshotSchedulerRunning))
@@ -427,6 +487,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	for _, reason := range scheduledSnapshotFailureReasons() {
 		fmt.Fprintf(w, "equities_scheduled_snapshot_history_refresh_failures_total{reason=\"%s\"} %d\n", prometheusLabelValue(reason), stats.HistoryRefreshFailures[reason])
 	}
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_benchmark_history_refresh_failures_total Failed shared beta-benchmark history refreshes by bounded reason.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_benchmark_history_refresh_failures_total counter\n")
+	for _, reason := range scheduledSnapshotFailureReasons() {
+		fmt.Fprintf(w, "equities_scheduled_snapshot_benchmark_history_refresh_failures_total{benchmark=\"SPY\",reason=\"%s\"} %d\n", prometheusLabelValue(reason), stats.BenchmarkHistoryRefreshFailures[reason])
+	}
 
 	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_last_success_timestamp_seconds Unix timestamp of the last newer scheduled quote observation.\n")
 	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_last_success_timestamp_seconds gauge\n")
@@ -448,6 +513,22 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_cache_timestamp_seconds gauge\n")
 	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_history_cache_age_seconds Age of the long-history cache entry used by the latest observation.\n")
 	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_history_cache_age_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_benchmark_history_cache_status Whether the shared beta-benchmark history cache is in each bounded state.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_benchmark_history_cache_status gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_benchmark_history_cache_timestamp_seconds Unix timestamp of the shared beta-benchmark cache entry.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_benchmark_history_cache_timestamp_seconds gauge\n")
+	fmt.Fprint(w, "# HELP equities_scheduled_snapshot_benchmark_history_cache_age_seconds Age of the shared beta-benchmark cache entry.\n")
+	fmt.Fprint(w, "# TYPE equities_scheduled_snapshot_benchmark_history_cache_age_seconds gauge\n")
+	benchmarkStatus, benchmarkAsOf := aggregateBenchmarkHistory(stats.ScheduledSnapshotObservations)
+	for _, cacheStatus := range []string{"fresh", "stale", "unavailable"} {
+		fmt.Fprintf(w, "equities_scheduled_snapshot_benchmark_history_cache_status{benchmark=\"SPY\",status=\"%s\"} %d\n", cacheStatus, boolGauge(benchmarkStatus == cacheStatus))
+	}
+	fmt.Fprintf(w, "equities_scheduled_snapshot_benchmark_history_cache_timestamp_seconds{benchmark=\"SPY\"} %.0f\n", prometheusTimestamp(benchmarkAsOf))
+	benchmarkAge := 0.0
+	if !benchmarkAsOf.IsZero() && now.After(benchmarkAsOf) {
+		benchmarkAge = now.Sub(benchmarkAsOf).Seconds()
+	}
+	fmt.Fprintf(w, "equities_scheduled_snapshot_benchmark_history_cache_age_seconds{benchmark=\"SPY\"} %g\n", benchmarkAge)
 
 	tickers := make([]string, 0, len(state.Tickers))
 	for ticker := range state.Tickers {
@@ -482,6 +563,33 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(w, "equities_scheduled_snapshot_history_cache_timestamp_seconds{ticker=\"%s\"} %.0f\n", label, prometheusTimestamp(observation.HistoryCacheAsOf))
 		fmt.Fprintf(w, "equities_scheduled_snapshot_history_cache_age_seconds{ticker=\"%s\"} %.0f\n", label, prometheusAge(observation.HistoryCacheAsOf, now))
 	}
+}
+
+func aggregateBenchmarkHistory(observations map[string]analysis.SnapshotObservation) (string, time.Time) {
+	rank := func(status string) int {
+		switch status {
+		case "unavailable":
+			return 3
+		case "stale":
+			return 2
+		case "fresh":
+			return 1
+		default:
+			return 0
+		}
+	}
+	status := ""
+	var asOf time.Time
+	for _, observation := range observations {
+		candidate := observation.BenchmarkHistoryCacheStatus
+		if rank(candidate) > rank(status) {
+			status = candidate
+			asOf = observation.BenchmarkHistoryCacheAsOf
+		} else if candidate == status && !observation.BenchmarkHistoryCacheAsOf.IsZero() && (asOf.IsZero() || observation.BenchmarkHistoryCacheAsOf.Before(asOf)) {
+			asOf = observation.BenchmarkHistoryCacheAsOf
+		}
+	}
+	return status, asOf
 }
 
 func scheduledSnapshotFailureReasons() []string {
@@ -567,6 +675,14 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request, basePath, s
 		http.ServeFile(w, r, target)
 		return
 	}
+	// A route without a file extension may be a client-side SPA location. A
+	// missing asset or other file-like request is always a real 404; serving the
+	// HTML shell with status 200 poisons caches and obscures broken deployments.
+	if strings.HasPrefix(clean, "assets"+string(filepath.Separator)) || filepath.Ext(clean) != "" {
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeFile(w, r, filepath.Join(staticDir, "index.html"))
 }
@@ -576,7 +692,10 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'")
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -604,7 +723,7 @@ func writeCachedJSON(w http.ResponseWriter, r *http.Request, value any) {
 	etag := fmt.Sprintf("\"%x\"", sha256.Sum256(body))
 	w.Header().Set("Cache-Control", "private, no-cache")
 	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
+	if ifNoneMatch(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -613,14 +732,39 @@ func writeCachedJSON(w http.ResponseWriter, r *http.Request, value any) {
 	_, _ = w.Write(append(body, '\n'))
 }
 
+// If-None-Match uses weak comparison for GET/HEAD cache validation. Cloudflare
+// legitimately weakens a strong origin ETag after content encoding, so compare
+// the opaque tag across W/ prefixes and support lists and the wildcard form.
+func ifNoneMatch(header, current string) bool {
+	normalize := func(value string) string {
+		value = strings.TrimSpace(value)
+		if strings.HasPrefix(value, "W/") {
+			value = strings.TrimSpace(strings.TrimPrefix(value, "W/"))
+		}
+		return value
+	}
+	current = normalize(current)
+	if current == "" {
+		return false
+	}
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || normalize(candidate) == current {
+			return true
+		}
+	}
+	return false
+}
+
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func clientIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); forwarded != "" {
-		return forwarded
-	}
+	// Do not trust caller-supplied forwarding headers. The administrative rate
+	// limiter runs after bearer authentication, and the socket peer is the only
+	// identity this process can establish without a configured trusted-proxy
+	// allowlist.
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
 		return host
