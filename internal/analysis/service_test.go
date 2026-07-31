@@ -42,6 +42,51 @@ type deadlineQuoteAnalyzer struct {
 	deadline chan time.Time
 }
 
+type refreshDuringQuoteAnalyzer struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+type staticQuoteAnalyzer struct {
+	quote model.LiveQuote
+}
+
+func (a *staticQuoteAnalyzer) Analyze(_ context.Context, _ string, existing *model.Equity) (*model.Equity, error) {
+	return existing, nil
+}
+
+func (a *staticQuoteAnalyzer) Quote(_ context.Context, _ string, _ *model.Equity) (model.LiveQuote, error) {
+	return a.quote, nil
+}
+
+func (a *refreshDuringQuoteAnalyzer) Analyze(_ context.Context, _ string, existing *model.Equity) (*model.Equity, error) {
+	result := *existing
+	result.Annuals = []model.AnnualPoint{{PeriodEnd: "2026-06-30", DilutedSharesB: floatPtr(12)}}
+	result.Current.SharesOutstandingB = floatPtr(12)
+	result.Current.SharesOutstandingAsOf = "2026-07-30"
+	result.Valuation.NetDebtB = floatPtr(7)
+	return &result, nil
+}
+
+func (a *refreshDuringQuoteAnalyzer) Quote(ctx context.Context, ticker string, _ *model.Equity) (model.LiveQuote, error) {
+	a.calls.Add(1)
+	close(a.started)
+	select {
+	case <-ctx.Done():
+		return model.LiveQuote{}, ctx.Err()
+	case <-a.release:
+	}
+	return model.LiveQuote{
+		Ticker:                     ticker,
+		Price:                      floatPtr(100),
+		AsOf:                       "2026-07-31T17:00:00Z",
+		Source:                     "fixture",
+		StockSplitCoverageStart:    "2020-01-01",
+		StockSplitCoverageComplete: true,
+	}, nil
+}
+
 func (a *deadlineQuoteAnalyzer) Analyze(_ context.Context, _ string, existing *model.Equity) (*model.Equity, error) {
 	return existing, nil
 }
@@ -186,6 +231,64 @@ func TestServiceCachesLiveQuoteForShortTTL(t *testing.T) {
 	correctedHistory := service.Snapshot().Tickers["AMZN"].QuoteHistory
 	if len(correctedHistory) != 2 || correctedHistory[1].Numeric["price"] != *third.Price {
 		t.Fatalf("equal-timestamp quote correction was not persisted: quote=%+v history=%+v", third, correctedHistory)
+	}
+}
+
+func TestServiceRebasesQuoteAfterConcurrentFundamentalsRefresh(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzer := &refreshDuringQuoteAnalyzer{started: make(chan struct{}), release: make(chan struct{})}
+	service := NewService(state, analyzer).WithQuoteTTL(time.Minute)
+	result := make(chan model.LiveQuote, 1)
+	quoteErr := make(chan error, 1)
+	go func() {
+		quote, err := service.Quote(context.Background(), "AMZN")
+		result <- quote
+		quoteErr <- err
+	}()
+	<-analyzer.started
+	service.refresh(context.Background(), "AMZN")
+	close(analyzer.release)
+	quote := <-result
+	if err := <-quoteErr; err != nil {
+		t.Fatal(err)
+	}
+	assertLiveFloat(t, "rebased shares", quote.SharesOutstandingB, 12)
+	assertLiveFloat(t, "rebased market cap", quote.MarketCapB, 1200)
+	assertLiveFloat(t, "rebased enterprise value", quote.EnterpriseValueB, 1207)
+	if quote.ShareBasisAsOf != "2026-07-30" {
+		t.Fatalf("stale share basis survived refresh: %+v", quote)
+	}
+	stored := service.Snapshot().Tickers["AMZN"].QuoteHistory
+	latest := stored[len(stored)-1]
+	if latest.Numeric["shares-outstanding"] != 12 || latest.Numeric["market-cap"] != 1200 || latest.Numeric["enterprise-value"] != 1207 {
+		t.Fatalf("persisted quote did not use refreshed fundamentals: %+v", latest)
+	}
+	cached, err := service.Quote(context.Background(), "AMZN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analyzer.calls.Load() != 1 || cached.SharesOutstandingB == nil || *cached.SharesOutstandingB != 12 {
+		t.Fatalf("cache retained stale fundamentals: calls=%d quote=%+v", analyzer.calls.Load(), cached)
+	}
+}
+
+func TestServiceRejectsImplausiblyFutureQuoteTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(state.Snapshot().Tickers["AMZN"].QuoteHistory)
+	service := NewService(state, &staticQuoteAnalyzer{quote: model.LiveQuote{Price: floatPtr(100), AsOf: "2099-01-01T00:00:00Z", Source: "fixture"}})
+	if _, err := service.Quote(context.Background(), "AMZN"); !errors.Is(err, ErrQuoteUpstream) {
+		t.Fatalf("future provider timestamp error = %v", err)
+	}
+	if after := len(state.Snapshot().Tickers["AMZN"].QuoteHistory); after != before {
+		t.Fatalf("future provider timestamp changed history: before=%d after=%d", before, after)
 	}
 }
 

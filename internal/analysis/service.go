@@ -84,6 +84,7 @@ type Service struct {
 	quoteCache       map[string]cachedQuote
 	quoteCalls       map[string]*quoteCall
 	quotePersistedAt map[string]time.Time
+	quoteFinalizeMu  sync.Mutex
 	snapshotMetrics  scheduledSnapshotMetrics
 
 	mu            sync.Mutex
@@ -183,6 +184,8 @@ func (s *Service) PreviewTicker(ctx context.Context, ticker string) (TickerPrevi
 
 func (s *Service) DeleteTicker(ticker string) error {
 	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	s.quoteFinalizeMu.Lock()
+	defer s.quoteFinalizeMu.Unlock()
 	if err := s.store.Delete(ticker); err != nil {
 		return err
 	}
@@ -248,10 +251,14 @@ func (s *Service) Quote(ctx context.Context, ticker string) (model.LiveQuote, er
 func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteAnalyzer, existing *model.Equity) {
 	var quote model.LiveQuote
 	var quoteErr error
+	finalizeLocked := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			quote = model.LiveQuote{}
 			quoteErr = fmt.Errorf("live quote provider panicked: %v", recovered)
+		}
+		if finalizeLocked {
+			defer s.quoteFinalizeMu.Unlock()
 		}
 		s.finishQuoteCall(ticker, call, quote, quoteErr)
 	}()
@@ -264,6 +271,24 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 		quoteErr = fmt.Errorf("%w: %w", ErrQuoteUpstream, quoteErr)
 		return
 	}
+	if observedAt, parseErr := time.Parse(time.RFC3339Nano, quote.AsOf); parseErr == nil && observedAt.After(time.Now().UTC().Add(5*time.Minute)) {
+		quote = model.LiveQuote{}
+		quoteErr = fmt.Errorf("%w: provider timestamp exceeds allowed future skew", ErrQuoteUpstream)
+		return
+	}
+	// Serialize the exact-share rebase, persistence, and cache publication with
+	// fundamentals commits. A refresh that completed while provider work was in
+	// flight therefore wins before this observation can become durable/current.
+	s.quoteFinalizeMu.Lock()
+	finalizeLocked = true
+	latest, latestErr := s.store.Get(ticker)
+	if latestErr != nil {
+		quote = model.LiveQuote{}
+		quoteErr = latestErr
+		return
+	}
+	quote = rebaseQuoteToEquity(quote, latest)
+	existing = latest
 	if s.quotePersistenceDue(ticker, time.Now().UTC()) && quoteObservationNeedsPersistence(existing.QuoteHistory, quote) {
 		history, err := s.store.RecordQuoteSnapshots(ticker, quote.History, model.NewStatisticSnapshot(quote))
 		if err != nil {
@@ -315,8 +340,8 @@ func quoteHasProviderObservation(quote model.LiveQuote) bool {
 	if strings.Contains(strings.ToLower(quote.FieldSources["asOf"]), "request time fallback") {
 		return false
 	}
-	_, err := time.Parse(time.RFC3339Nano, quote.AsOf)
-	return err == nil
+	observedAt, err := time.Parse(time.RFC3339Nano, quote.AsOf)
+	return err == nil && !observedAt.After(time.Now().UTC().Add(5*time.Minute))
 }
 
 const quotePersistenceInterval = 15 * time.Minute
@@ -522,6 +547,8 @@ func (s *Service) refresh(parent context.Context, ticker string) {
 		_ = s.store.SetError(ticker, err)
 		return
 	}
+	s.quoteFinalizeMu.Lock()
+	defer s.quoteFinalizeMu.Unlock()
 	if err := s.store.SetResult(ticker, result); err != nil {
 		s.failures.Add(1)
 		return

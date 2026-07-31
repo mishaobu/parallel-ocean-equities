@@ -283,6 +283,7 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 		if incomingAt.Before(current.observed) {
 			return cloneStatisticSnapshots(history), false
 		}
+		incoming = mergeSameDayStatisticSnapshot(current.snapshot, incoming, incomingAt)
 		if incomingAt.Equal(current.observed) && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
 			return cloneStatisticSnapshots(history), false
 		}
@@ -311,6 +312,51 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 		out[index] = cloneStatisticSnapshot(row.snapshot)
 	}
 	return out, true
+}
+
+// mergeSameDayStatisticSnapshot keeps a daily observation monotonic when a
+// later provider response is degraded or sparse. Fields present in the newer
+// response are authoritative corrections; absent fields retain the richest
+// value already persisted for that same UTC day. Provenance is replaced with
+// each corrected value and removed when the correction supplies none.
+func mergeSameDayStatisticSnapshot(current, incoming model.StatisticSnapshot, incomingAt time.Time) model.StatisticSnapshot {
+	merged := cloneStatisticSnapshot(current)
+	merged.AsOf = incomingAt.UTC().Format(time.RFC3339Nano)
+	// AsOf always comes from the incoming observation, so its provenance must
+	// move with it (or be cleared) rather than describe the retained timestamp.
+	merged.AsOfSource = incoming.AsOfSource
+	if incoming.Source != "" {
+		merged.Source = incoming.Source
+	}
+
+	for key, value := range incoming.Numeric {
+		if merged.Numeric == nil {
+			merged.Numeric = make(map[string]float64)
+		}
+		merged.Numeric[key] = value
+		delete(merged.Text, key)
+		mergeStatisticSource(&merged, incoming, key)
+	}
+	for key, value := range incoming.Text {
+		if merged.Text == nil {
+			merged.Text = make(map[string]string)
+		}
+		merged.Text[key] = value
+		delete(merged.Numeric, key)
+		mergeStatisticSource(&merged, incoming, key)
+	}
+	return merged
+}
+
+func mergeStatisticSource(merged *model.StatisticSnapshot, incoming model.StatisticSnapshot, key string) {
+	if source := incoming.Sources[key]; source != "" {
+		if merged.Sources == nil {
+			merged.Sources = make(map[string]string)
+		}
+		merged.Sources[key] = source
+		return
+	}
+	delete(merged.Sources, key)
 }
 
 func cloneStatisticSnapshots(history []model.StatisticSnapshot) []model.StatisticSnapshot {

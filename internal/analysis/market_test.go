@@ -97,7 +97,7 @@ func TestYahooMarketBuildsLiveQuoteFromChartHistory(t *testing.T) {
 		var payload map[string]any
 		switch r.URL.Query().Get("range") {
 		case "5d":
-			if r.URL.Query().Get("events") != "history" {
+			if r.URL.Query().Get("events") != "div,splits" {
 				http.Error(w, "unexpected current quote request: "+r.URL.String(), http.StatusBadRequest)
 				return
 			}
@@ -125,6 +125,9 @@ func TestYahooMarketBuildsLiveQuoteFromChartHistory(t *testing.T) {
 	}
 	if quote.Ticker != "AAPL" || quote.Source != yahooQuoteSource || quote.MarketState != "REGULAR" || quote.Exchange != "NasdaqGS" || quote.Currency != "USD" {
 		t.Fatalf("unexpected quote identity: %+v", quote)
+	}
+	if !quote.StockSplitCoverageComplete || quote.StockSplitCoverageStart == "" || len(quote.StockSplits) != 1 || quote.StockSplits[0].Ratio != 4 {
+		t.Fatalf("split coverage missing: %+v", quote)
 	}
 	assertLiveFloat(t, "price", quote.Price, 405)
 	assertLiveFloat(t, "previous close", quote.PreviousClose, 400)
@@ -463,10 +466,18 @@ func TestYahooLiveQuoteNeverUsesRangeBoundaryAsPreviousClose(t *testing.T) {
 }
 
 func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
-	market := &fakeMarketProvider{quote: model.LiveQuote{Price: floatPtr(200), MarketCapB: floatPtr(9999)}}
+	market := &fakeMarketProvider{quote: model.LiveQuote{
+		Price:                      floatPtr(200),
+		AsOf:                       "2026-07-31T15:30:00Z",
+		MarketCapB:                 floatPtr(9999),
+		StockSplitCoverageStart:    "2016-08-01",
+		StockSplitCoverageComplete: true,
+		StockSplits:                []model.StockSplitEvent{{Date: "2026-07-01", Numerator: 10, Denominator: 1, Ratio: 10}},
+	}}
 	pipeline := &Pipeline{Market: market}
 	equity := &model.Equity{
-		Current:   model.CurrentMetrics{SharesOutstandingB: floatPtr(15), SharesOutstandingAsOf: "2026-06-27"},
+		Annuals:   []model.AnnualPoint{{PeriodEnd: "2026-06-30", DilutedSharesB: floatPtr(15)}},
+		Current:   model.CurrentMetrics{SharesOutstandingB: floatPtr(1.5), SharesOutstandingAsOf: "2026-06-27"},
 		Valuation: model.ValuationMetrics{NetDebtB: floatPtr(50)},
 	}
 	quote, err := pipeline.Quote(context.Background(), "aapl", equity)
@@ -479,6 +490,13 @@ func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
 	if quote.ShareBasisAsOf != "2026-06-27" {
 		t.Fatalf("unexpected share basis: %+v", quote)
 	}
+	if strings.Count(quote.Source, exactSharesAggregateSource) != 1 || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "split-adjusted x10") {
+		t.Fatalf("split provenance is not exact/idempotent: %+v", quote)
+	}
+	quote = rebaseQuoteToEquity(quote, equity)
+	if quote.SharesOutstandingB == nil || *quote.SharesOutstandingB != 15 || strings.Count(quote.Source, exactSharesAggregateSource) != 1 {
+		t.Fatalf("rebase was not idempotent: %+v", quote)
+	}
 
 	withoutExactShares, err := pipeline.Quote(context.Background(), "AAPL", &model.Equity{Valuation: model.ValuationMetrics{NetDebtB: floatPtr(50)}})
 	if err != nil {
@@ -486,6 +504,56 @@ func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
 	}
 	if withoutExactShares.MarketCapB != nil || withoutExactShares.EnterpriseValueB != nil || withoutExactShares.SharesOutstandingB != nil {
 		t.Fatalf("market value must be absent without exact SEC shares: %+v", withoutExactShares)
+	}
+}
+
+func TestYahooStockSplitEventsValidateAndMergeCurrentHistory(t *testing.T) {
+	asOf := time.Date(2026, time.July, 31, 17, 0, 0, 0, time.UTC)
+	history := yahooQuoteResult{}
+	history.Events.Splits = map[string]yahooSplitEvent{
+		"old": {Date: time.Date(2021, time.July, 20, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 4, Denominator: 1},
+	}
+	current := yahooQuoteResult{}
+	current.Events.Splits = map[string]yahooSplitEvent{
+		"new": {Date: time.Date(2024, time.June, 10, 0, 0, 0, 0, time.UTC).Unix(), Numerator: 10, Denominator: 1},
+	}
+	events, ok := yahooStockSplitEvents(current, history, asOf)
+	if !ok || len(events) != 2 || events[0].Date != "2021-07-20" || events[1].Date != "2024-06-10" {
+		t.Fatalf("validated split events = %#v, ok=%v", events, ok)
+	}
+	quote := model.LiveQuote{
+		AsOf:                       asOf.Format(time.RFC3339),
+		StockSplits:                events,
+		StockSplitCoverageStart:    "2020-01-01",
+		StockSplitCoverageComplete: true,
+	}
+	adjusted, factor, ok := splitAdjustedActualShares(0.615, "2021-06-30", quote)
+	if !ok || math.Abs(adjusted-24.6) > 1e-9 || factor != 40 {
+		t.Fatalf("cumulative split adjustment = %v x%v, ok=%v", adjusted, factor, ok)
+	}
+	quote.StockSplitCoverageComplete = false
+	if _, _, ok := splitAdjustedActualShares(0.615, "2021-06-30", quote); ok {
+		t.Fatal("incomplete split coverage was accepted")
+	}
+	quote.StockSplitCoverageComplete = true
+	quote.StockSplitCoverageStart = "2022-01-01"
+	if _, _, ok := splitAdjustedActualShares(0.615, "2021-06-30", quote); ok {
+		t.Fatal("pre-coverage share basis was accepted")
+	}
+
+	current.Events.Splits["conflict"] = yahooSplitEvent{Date: current.Events.Splits["new"].Date, Numerator: 5, Denominator: 1}
+	if _, ok := yahooStockSplitEvents(current, history, asOf); ok {
+		t.Fatal("conflicting same-day split events were accepted")
+	}
+}
+
+func TestYahooBetaBenchmarkCacheDegradationIsObservable(t *testing.T) {
+	now := time.Date(2026, time.July, 31, 17, 0, 0, 0, time.UTC)
+	target := yahooHistoryMetadata{cacheStatus: "fresh", cachedAt: now}
+	benchmark := yahooHistoryMetadata{cacheStatus: "stale", cachedAt: now.Add(-48 * time.Hour), refreshFailureKind: "throttled", refreshFailed: true}
+	merged := mergeYahooHistoryMetadata(target, benchmark)
+	if merged.cacheStatus != "stale" || !merged.cachedAt.Equal(benchmark.cachedAt) || merged.refreshFailureKind != "throttled" || !merged.refreshFailed {
+		t.Fatalf("benchmark cache degradation was hidden: %+v", merged)
 	}
 }
 

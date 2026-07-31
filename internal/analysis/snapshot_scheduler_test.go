@@ -74,6 +74,22 @@ func TestQuoteSnapshotSchedulerRetriesErrors(t *testing.T) {
 	waitSnapshotDone(t, done)
 }
 
+func TestQuoteSnapshotSchedulerRetriesUnknownMarketState(t *testing.T) {
+	now := time.Date(2026, 7, 31, 14, 0, 0, 0, time.UTC)
+	config := snapshotTestConfig(newSnapshotTestClock(now))
+	scheduler := mustSnapshotScheduler(t, newScriptedSnapshotProvider(nil), snapshotTickerList{"AAPL"}, config)
+	state := &quoteSnapshotSchedule{}
+
+	scheduler.applyResult(state, quoteSnapshotResult{ticker: "AAPL", marketState: "UNKNOWN"}, now)
+	if !state.nextDue.Equal(now.Add(config.RetryInterval)) {
+		t.Fatalf("unknown-state retry due = %s", state.nextDue)
+	}
+	scheduler.applyResult(state, quoteSnapshotResult{ticker: "AAPL", marketState: "PRE"}, now)
+	if !state.nextDue.Equal(now.Add(config.RegularInterval)) || !state.needsPostCloseConfirm {
+		t.Fatalf("pre-market cadence = %+v", state)
+	}
+}
+
 func TestQuoteSnapshotSchedulerBoundsConcurrencyAndTickerOverlap(t *testing.T) {
 	clock := newSnapshotTestClock(time.Date(2026, 7, 31, 14, 0, 0, 0, time.UTC))
 	provider := newBlockingSnapshotProvider()
@@ -160,10 +176,7 @@ func TestQuoteSnapshotSchedulerDefersForMacroRefresh(t *testing.T) {
 
 func TestQuoteSnapshotSchedulerReconcilesPersistedTickers(t *testing.T) {
 	clock := newSnapshotTestClock(time.Date(2026, 7, 31, 14, 0, 0, 0, time.UTC))
-	provider := newScriptedSnapshotProvider([]snapshotProviderResult{
-		{quote: model.LiveQuote{Ticker: "AAPL", MarketState: "REGULAR"}},
-		{quote: model.LiveQuote{Ticker: "MSFT", MarketState: "REGULAR"}},
-	})
+	provider := newBlockingSnapshotProvider()
 	tickers := &mutableSnapshotTickerList{tickers: []string{"AAPL"}}
 	config := snapshotTestConfig(clock)
 	config.DiscoveryInterval = time.Minute
@@ -176,9 +189,12 @@ func TestQuoteSnapshotSchedulerReconcilesPersistedTickers(t *testing.T) {
 		close(done)
 	}()
 	waitSnapshotCall(t, provider.calls, "AAPL")
+	// Consume the timer installed while AAPL is in flight, then release the
+	// result so the next timer is known to use the reconciled scheduler state.
 	waitSnapshotTimer(t, clock.created, config.DiscoveryInterval)
-
 	tickers.set([]string{"MSFT"})
+	provider.releaseOne <- struct{}{}
+	waitSnapshotTimer(t, clock.created, config.DiscoveryInterval)
 	clock.Advance(config.DiscoveryInterval)
 	waitSnapshotCall(t, provider.calls, "MSFT")
 

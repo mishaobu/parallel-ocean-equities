@@ -46,6 +46,7 @@ const equity: Equity = {
   ticker: "TEST",
   company: "Test Company",
   status: "ready",
+  sources: ["SEC CompanyFacts", "Yahoo Finance monthly close and adjusted close"],
   annuals: [
     { fiscalYear: 2024, periodEnd: "2024-12-31", filedAt: "2025-02-01", revenueB: 80, grossProfitB: 40, ebitB: 20, ebitdaB: 24, netIncomeB: 16, operatingCashB: 20, fcfB: 16, dividendsB: 2, dilutedEps: 1.6, dilutedSharesB: 10, sharesOutstandingB: 9.8, sharesOutstandingAsOf: "2025-01-20", cashB: 15, investmentsB: 5, debtB: 50, netDebtB: 30, currentAssetsB: 40, currentLiabilitiesB: 20, assetsB: 180, liabilitiesB: 120, equityB: 60 },
     { fiscalYear: 2025, periodEnd: "2025-12-31", filedAt: "2026-02-01", revenueB: 100, grossProfitB: 52, ebitB: 28, ebitdaB: 32, netIncomeB: 20, operatingCashB: 24, fcfB: 20, dividendsB: 2, dilutedEps: 2, dilutedSharesB: 10, sharesOutstandingB: 9.8, sharesOutstandingAsOf: "2026-01-20", cashB: 15, investmentsB: 5, debtB: 50, netDebtB: 30, currentAssetsB: 40, currentLiabilitiesB: 20, assetsB: 200, liabilitiesB: 120, equityB: 80 },
@@ -68,6 +69,9 @@ const quote: LiveQuote = {
   price: 100,
   asOf: "2026-03-02T15:30:00Z",
   marketState: "REGULAR",
+  stockSplitCoverageStart: "2020-01-01",
+  stockSplitCoverageComplete: true,
+  stockSplits: [],
   sharesOutstandingB: 9.8,
   shareBasisAsOf: "2026-01-20",
   movingAverage50Day: 92,
@@ -105,6 +109,49 @@ describe("statistics catalog", () => {
     expect(marketCap.points.quarter.at(-1)?.value).toBeCloseTo(882);
     const withoutHistoricalShares = { ...equity, annuals: equity.annuals.map((row) => ({ ...row, sharesOutstandingB: undefined, sharesOutstandingAsOf: undefined })), quarterlies: equity.quarterlies?.map((row) => ({ ...row, sharesOutstandingB: undefined, sharesOutstandingAsOf: undefined })) };
     expect(buildStatisticsCatalog(withoutHistoricalShares, { ...quote, history: [] }).metrics.find((metric) => metric.key === "market-cap")?.points.quarter).toEqual([]);
+  });
+
+  it("aligns raw SEC shares to Yahoo's exact split-adjusted price basis", () => {
+    const rows: QuarterlyPoint[] = [
+      [2023, "Q2", "2023-06-30", "2023-08-15", 2.5, "2023-08-10"],
+      [2023, "Q3", "2023-09-30", "2023-11-15", 2.5, "2023-11-10"],
+      [2023, "Q4", "2023-12-31", "2024-02-15", 2.5, "2024-02-10"],
+      [2024, "Q1", "2024-03-31", "2024-05-20", 2.46, "2024-05-15"],
+      [2024, "Q2", "2024-06-30", "2024-08-20", 24.53, "2024-08-15"],
+    ].map(([fiscalYear, fiscalQuarter, periodEnd, filedAt, sharesOutstandingB, sharesOutstandingAsOf]) => ({
+      fiscalYear: fiscalYear as number,
+      fiscalQuarter: fiscalQuarter as string,
+      periodEnd: periodEnd as string,
+      filedAt: filedAt as string,
+      revenueB: 10,
+      netIncomeB: 2,
+      dilutedSharesB: 24.89,
+      sharesOutstandingB: sharesOutstandingB as number,
+      sharesOutstandingAsOf: sharesOutstandingAsOf as string,
+    }));
+    const nvda: Equity = {
+      ticker: "NVDA",
+      status: "ready",
+      sources: ["SEC CompanyFacts", "Yahoo Finance monthly close and adjusted close"],
+      annuals: [],
+      quarterlies: rows,
+      prices: [
+        { date: "2024-05-20", close: 86.402 },
+        { date: "2024-08-20", close: 117.02 },
+      ],
+      current: {},
+    };
+    const nvdaQuote: LiveQuote = {
+      ticker: "NVDA",
+      asOf: "2026-07-31T17:00:00Z",
+      stockSplitCoverageStart: "2020-01-01",
+      stockSplitCoverageComplete: true,
+      stockSplits: [{ date: "2024-06-10", numerator: 10, denominator: 1, ratio: 10 }],
+    };
+    const marketCap = buildStatisticsCatalog(nvda, nvdaQuote).metrics.find((metric) => metric.key === "market-cap")!;
+    expect(marketCap.points.quarter.at(-2)?.value).toBeCloseTo(2125.4892);
+    expect(marketCap.points.quarter.at(-1)?.value).toBeCloseTo(2870.5006);
+    expect(marketCap.points.quarter.at(-2)?.source).toContain("split-adjusted x10");
   });
 
   it("does not expose monthly fundamentals before the filing was available", () => {

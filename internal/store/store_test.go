@@ -84,7 +84,7 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Numeric["price"] != 110 || history[0].Source != "later fixture" {
+	if len(history) != 1 || history[0].Numeric["price"] != 110 || history[0].Text["market-state"] != "REGULAR" || history[0].Source != "later fixture" {
 		t.Fatalf("later same-day observation did not replace history: %#v", history)
 	}
 
@@ -122,6 +122,82 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	}
 	if len(persisted.QuoteHistory) != 2 || persisted.QuoteHistory[0].Numeric["price"] != 112 || persisted.QuoteHistory[0].Sources["price"] != "corrected price" || persisted.QuoteHistory[0].AsOfSource != "same exchange timestamp" {
 		t.Fatalf("snapshot history was not persisted exactly: %#v", persisted.QuoteHistory)
+	}
+}
+
+func TestMergeQuoteHistoryPreservesRicherSameDaySnapshot(t *testing.T) {
+	observed := time.Date(2026, 7, 31, 17, 0, 0, 0, time.UTC)
+	prior := model.StatisticSnapshot{
+		AsOf:       observed.Format(time.RFC3339),
+		Source:     "rich history",
+		AsOfSource: "exchange timestamp",
+		Numeric: map[string]float64{
+			"price":                  100,
+			"moving-average-50d":     95,
+			"moving-average-200d":    80,
+			"average-volume-10d":     10_000,
+			"average-volume-3m":      12_000,
+			"beta-5y":                1.2,
+			"trailing-dividend-rate": 0.5,
+		},
+		Text: map[string]string{"market-state": "REGULAR"},
+		Sources: map[string]string{
+			"price":                  "old price",
+			"moving-average-50d":     "rich 50-day history",
+			"moving-average-200d":    "rich 200-day history",
+			"average-volume-10d":     "rich 10-day history",
+			"average-volume-3m":      "rich 3-month history",
+			"beta-5y":                "rich beta history",
+			"trailing-dividend-rate": "rich dividend history",
+			"market-state":           "old market state",
+		},
+	}
+
+	corrected := model.StatisticSnapshot{
+		AsOf:       prior.AsOf,
+		Source:     "sparse correction",
+		AsOfSource: "corrected exchange timestamp",
+		Numeric:    map[string]float64{"price": 101},
+		Text:       map[string]string{"market-state": "CLOSED"},
+		Sources:    map[string]string{"price": "corrected price", "market-state": "corrected market state"},
+	}
+	history, accepted := mergeQuoteHistory([]model.StatisticSnapshot{prior}, corrected, observed)
+	if !accepted || len(history) != 1 {
+		t.Fatalf("equal-time correction was not accepted: accepted=%v history=%#v", accepted, history)
+	}
+	got := history[0]
+	if got.Numeric["price"] != 101 || got.Sources["price"] != "corrected price" || got.Text["market-state"] != "CLOSED" {
+		t.Fatalf("correction was not applied: %#v", got)
+	}
+	for _, key := range []string{"moving-average-50d", "moving-average-200d", "average-volume-10d", "average-volume-3m", "beta-5y", "trailing-dividend-rate"} {
+		if got.Numeric[key] != prior.Numeric[key] || got.Sources[key] != prior.Sources[key] {
+			t.Fatalf("rich field %q was degraded: %#v", key, got)
+		}
+	}
+
+	later := observed.Add(30 * time.Second)
+	laterSparse := model.StatisticSnapshot{
+		AsOf:    later.Format(time.RFC3339),
+		Numeric: map[string]float64{"price": 102},
+	}
+	history, accepted = mergeQuoteHistory(history, laterSparse, later)
+	if !accepted || history[0].AsOf != later.Format(time.RFC3339) || history[0].Numeric["moving-average-200d"] != 80 {
+		t.Fatalf("later sparse observation degraded same-day history: accepted=%v history=%#v", accepted, history)
+	}
+	if history[0].AsOfSource != "" {
+		t.Fatalf("stale timestamp provenance survived a source-less correction: %q", history[0].AsOfSource)
+	}
+	if _, exists := history[0].Sources["price"]; exists {
+		t.Fatalf("stale price provenance survived a source-less correction: %#v", history[0].Sources)
+	}
+
+	nextDay := later.Add(24 * time.Hour)
+	history, accepted = mergeQuoteHistory(history, model.StatisticSnapshot{AsOf: nextDay.Format(time.RFC3339), Numeric: map[string]float64{"price": 103}}, nextDay)
+	if !accepted || len(history) != 2 {
+		t.Fatalf("next-day observation was not added: accepted=%v history=%#v", accepted, history)
+	}
+	if _, inherited := history[1].Numeric["moving-average-200d"]; inherited {
+		t.Fatalf("next-day sparse observation inherited a prior-day field: %#v", history[1])
 	}
 }
 

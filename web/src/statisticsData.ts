@@ -65,6 +65,7 @@ interface Snapshot {
   dilutedEps?: number;
   sharesB?: number;
   shareBasisAsOf?: string;
+  shareAdjustmentFactor?: number;
   dilutedSharesB?: number;
   cashB?: number;
   debtB?: number;
@@ -126,8 +127,8 @@ const filingSource = "SEC filings / point-in-time calculation";
 const vendorGap = "A licensed fundamentals or ownership feed is required for this vendor-defined statistic.";
 
 export function buildStatisticsCatalog(equity: Equity, quote?: LiveQuote, benchmark?: Equity): StatisticsCatalog {
-  const quarter = buildQuarterSnapshots(equity);
-  const year = buildAnnualSnapshots(equity);
+  const quarter = alignHistoricalShareBasis(buildQuarterSnapshots(equity), equity, quote);
+  const year = alignHistoricalShareBasis(buildAnnualSnapshots(equity), equity, quote);
   const month = buildMonthlySnapshots(equity, quarter);
   const current = buildCurrentSnapshot(equity, quote, quarter);
   const context: BuildContext = { equity, quote, benchmark, snapshots: { month, quarter, year }, current };
@@ -149,7 +150,7 @@ function buildMetric(definition: Definition, context: BuildContext): StatisticMe
       : context.snapshots[resolution].flatMap((snapshot) => {
         const value = definition.resolve?.(snapshot);
         const source = historicalShareBasisKeys.has(definition.key) && snapshot.shareBasisAsOf
-          ? `${snapshot.source}; actual basic shares disclosed ${snapshot.shareBasisAsOf}`
+          ? `${snapshot.source}; issuer-disclosed basic shares as of ${snapshot.shareBasisAsOf}, Yahoo split-adjusted x${snapshot.shareAdjustmentFactor ?? 1} for comparability`
           : snapshot.source;
         return finite(value) ? [{ date: snapshot.date, label: snapshot.label, value, basisDate: snapshot.basisDate, source }] : [];
       });
@@ -311,7 +312,7 @@ function currentBasis(definition: Definition, context: BuildContext): string | u
 
 const definitions: Definition[] = [
   // Yahoo valuation measures (9)
-  metric("market-cap", "Market cap", "Valuation measures", "billions", "Live equity value uses the current price and latest disclosed basic shares. Filing history uses accession-matched actual shares and the last market close available when that filing arrived.", "price × shares outstanding", (s) => multiply(s.price, s.sharesB), { current: exactMarketCap }),
+  metric("market-cap", "Market cap", "Valuation measures", "billions", "Live equity value uses the current price and latest disclosed basic shares. Filing history uses accession-matched actual shares, split-adjusted to the price basis, and the last market close available when that filing arrived.", "price × shares outstanding", (s) => multiply(s.price, s.sharesB), { current: exactMarketCap }),
   metric("enterprise-value", "Enterprise value", "Valuation measures", "billions", "Equity value adjusted for reported net debt. Current EV is a timestamped market/filing hybrid; filing history uses accession-matched shares and available-date prices.", "market cap + debt − cash and investments", (s) => add(multiply(s.price, s.sharesB), s.netDebtB), { current: exactEnterpriseValue }),
   metric("trailing-pe", "Trailing P/E", "Valuation measures", "multiple", "Price relative to trailing diluted earnings available at that date.", "price ÷ TTM diluted EPS", (s) => positiveRatio(s.price, s.dilutedEps)),
   metric("forward-pe", "Forward P/E", "Valuation measures", "multiple", "Live price relative to the configured forward earnings model; this is not analyst consensus. History stays empty until point-in-time forecasts are archived.", "price ÷ modeled N12M diluted EPS", undefined, { current: (c) => positiveRatio(c.quote?.price ?? c.equity.current.price, c.equity.forecast?.forwardEps ?? c.equity.current.forwardEps), points: emptyPoints, source: "Current market snapshot + Parallel Ocean forecast model", unavailableReason: "A forward model or archived point-in-time forecast is not available." }),
@@ -355,7 +356,7 @@ const definitions: Definition[] = [
   metric("moving-average-200d", "200-day moving average", "Stock price history", "currency", "Average daily close over the latest 200 trading sessions.", undefined, undefined, { current: (c) => c.quote?.movingAverage200Day, source: quoteSource, points: emptyPoints }),
   metric("average-volume-3m", "Average volume (3 month)", "Share statistics", "volume", "Average daily traded volume over roughly three months.", undefined, undefined, { current: (c) => c.quote?.averageVolume3Month, source: quoteSource, points: emptyPoints }),
   metric("average-volume-10d", "Average volume (10 day)", "Share statistics", "volume", "Average daily traded volume over ten sessions.", undefined, undefined, { current: (c) => c.quote?.averageVolume10Day, source: quoteSource, points: emptyPoints }),
-  metric("shares-outstanding", "Shares outstanding", "Share statistics", "shares-billions", "Actual basic common shares disclosed by the issuer; no weighted-diluted fallback is used.", undefined, (s) => s.sharesB, { current: exactShares }),
+  metric("shares-outstanding", "Shares outstanding", "Share statistics", "shares-billions", "Actual basic common shares disclosed by the issuer, split-adjusted for comparability; no weighted-diluted fallback is used.", undefined, (s) => s.sharesB, { current: exactShares }),
   metric("implied-shares-outstanding", "Implied shares outstanding", "Share statistics", "shares-billions", "Common share equivalent after convertible subsidiary equity.", undefined, undefined, { unavailableReason: vendorGap }),
   metric("float", "Float", "Share statistics", "shares-billions", "Shares estimated to be publicly tradable.", undefined, undefined, { unavailableReason: vendorGap }),
   metric("held-by-insiders", "% held by insiders", "Share statistics", "percent", "Reported beneficial ownership attributed to insiders.", undefined, undefined, { unavailableReason: "Normalized Forms 3/4/5 and proxy ownership data are not configured." }),
@@ -509,6 +510,49 @@ function snapshotFromAnnual(row: AnnualPoint, previous: AnnualPoint | undefined,
   };
 }
 
+function alignHistoricalShareBasis(snapshots: Snapshot[], equity: Equity, quote?: LiveQuote): Snapshot[] {
+  const yahooPriceBasis = equity.sources?.some((source) => source.includes("Yahoo Finance monthly close and adjusted close"));
+  const splitBasis = validatedSplitBasis(quote);
+  return snapshots.map((snapshot) => {
+    const suppressed = { ...snapshot, sharesB: undefined, shareAdjustmentFactor: undefined };
+    if (!yahooPriceBasis || !splitBasis || snapshot.sharesB === undefined || !validDate(snapshot.shareBasisAsOf)) return suppressed;
+    const shareDate = snapshot.shareBasisAsOf.slice(0, 10);
+    if (shareDate < splitBasis.coverageStart || shareDate > splitBasis.quoteDate) return suppressed;
+    let factor = 1;
+    for (const event of splitBasis.events) {
+      if (event.date === shareDate) return suppressed;
+      if (event.date > shareDate) factor *= event.ratio;
+      if (!Number.isFinite(factor) || factor < 1e-6 || factor > 1e6) return suppressed;
+    }
+    const adjusted = snapshot.sharesB * factor;
+    if (!Number.isFinite(adjusted) || adjusted <= 0) return suppressed;
+    if (snapshot.dilutedSharesB !== undefined && snapshot.dilutedSharesB > 0) {
+      const ratio = adjusted / snapshot.dilutedSharesB;
+      if (ratio < 0.8 || ratio > 1.25) return suppressed;
+    }
+    return { ...snapshot, sharesB: adjusted, shareAdjustmentFactor: factor };
+  });
+}
+
+function validatedSplitBasis(quote?: LiveQuote) {
+  if (!quote?.stockSplitCoverageComplete || !validDate(quote.stockSplitCoverageStart) || !validDate(quote.asOf)) return undefined;
+  const coverageStart = quote.stockSplitCoverageStart.slice(0, 10);
+  const quoteDate = quote.asOf.slice(0, 10);
+  if (coverageStart > quoteDate) return undefined;
+  const byDate = new Map<string, number>();
+  for (const event of quote.stockSplits ?? []) {
+    if (!validDate(event.date) || !Number.isFinite(event.numerator) || event.numerator <= 0 || !Number.isFinite(event.denominator) || event.denominator <= 0 || !Number.isFinite(event.ratio) || event.ratio <= 0) return undefined;
+    const date = event.date.slice(0, 10);
+    const ratio = event.numerator / event.denominator;
+    if (date > quoteDate || Math.abs(ratio - event.ratio) > 1e-12) return undefined;
+    const prior = byDate.get(date);
+    if (prior !== undefined && Math.abs(prior - ratio) > 1e-12) return undefined;
+    byDate.set(date, ratio);
+  }
+  const events = [...byDate.entries()].map(([date, ratio]) => ({ date, ratio })).sort((left, right) => left.date.localeCompare(right.date));
+  return { coverageStart, quoteDate, events };
+}
+
 function buildMonthlySnapshots(equity: Equity, quarters: Snapshot[]): Snapshot[] {
   const prices = sortedPrices(equity.prices);
   if (!prices.length) return [];
@@ -526,14 +570,14 @@ function buildCurrentSnapshot(equity: Equity, quote: LiveQuote | undefined, quar
   const basis = latestQuarter && latestTTM?.date !== latestQuarter.periodEnd
     ? balanceSnapshot(latestQuarter, equity)
     : latestTTM ?? last(buildAnnualSnapshots(equity)) ?? { date: equity.current.priceAsOf ?? "", label: "Current", source: filingSource };
-  const sharesB = quote?.sharesOutstandingB ?? equity.current.sharesOutstandingB ?? basis.sharesB;
+  const sharesB = quote?.sharesOutstandingB;
   return {
     ...basis,
     date: quote?.asOf?.slice(0, 10) || equity.current.priceAsOf || basis.date,
     label: "Current",
     price: quote?.price ?? equity.current.price ?? basis.price,
     sharesB,
-    shareBasisAsOf: quote?.shareBasisAsOf ?? equity.current.sharesOutstandingAsOf ?? basis.shareBasisAsOf,
+    shareBasisAsOf: quote?.shareBasisAsOf,
   };
 }
 
@@ -678,7 +722,7 @@ function currencySymbol(currency: string) {
 }
 
 function exactShares(context: BuildContext) {
-  return context.quote?.sharesOutstandingB ?? context.equity.current.sharesOutstandingB;
+  return context.quote?.sharesOutstandingB;
 }
 
 function exactMarketCap(context: BuildContext) {

@@ -41,7 +41,7 @@ func TestSECAnalyzePopulatesOnlyExactSharesOutstanding(t *testing.T) {
 			fact{Start: "2025-01-01", End: "2025-03-31", Val: 25e9, Accn: "0000000001-25-000002", FY: 2025, FP: "Q1", Form: "10-Q", Filed: "2025-04-20"},
 		),
 		"WeightedAverageNumberOfDilutedSharesOutstanding": {Units: map[string][]fact{"shares": {
-			{Start: "2024-01-01", End: "2024-12-31", Val: 9e9, Accn: "0000000001-25-000001", FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-01"},
+			{Start: "2024-01-01", End: "2024-12-31", Val: 1.3e9, Accn: "0000000001-25-000001", FY: 2024, FP: "FY", Form: "10-K", Filed: "2025-02-01"},
 		}}},
 	}}
 
@@ -93,6 +93,44 @@ func TestSECAnalyzePopulatesOnlyExactSharesOutstanding(t *testing.T) {
 			t.Fatalf("unexpected shares-outstanding fallback: %#v", result.Current)
 		}
 	})
+}
+
+func TestActualSharesOutstandingRemainRawSECValues(t *testing.T) {
+	const accession = "0000000001-24-000001"
+	response := companyFacts{Facts: map[string]map[string]factConcept{
+		"us-gaap": {
+			"RevenueFromContractWithCustomerExcludingAssessedTax": durationConcept(
+				fact{Start: "2024-01-01", End: "2024-03-31", Val: 25e9, Accn: accession, FY: 2024, FP: "Q1", Form: "10-Q", Filed: "2024-07-20"},
+			),
+			"WeightedAverageNumberOfDilutedSharesOutstanding": {Units: map[string][]fact{"shares": {
+				// Filed after the split, so the issuer already presented this
+				// duration value on the post-split basis.
+				{Start: "2024-01-01", End: "2024-03-31", Val: 14e9, Accn: accession, FY: 2024, FP: "Q1", Form: "10-Q", Filed: "2024-07-20"},
+			}}},
+			"StockholdersEquityNoteStockSplitConversionRatio1": {Units: map[string][]fact{"pure": {
+				{End: "2024-06-01", Val: 10, Form: "10-Q", Filed: "2024-07-20"},
+			}}},
+		},
+		"dei": {
+			"EntityCommonStockSharesOutstanding": {Units: map[string][]fact{"shares": {
+				// The filing came after the split, but the instant fact predates
+				// it and therefore still needs the 10:1 adjustment.
+				{End: "2024-04-10", Val: 1.35e9, Accn: accession, Form: "10-Q", Filed: "2024-07-20"},
+			}}},
+		},
+	}}
+
+	quarters, err := extractQuarterlies(response, "0000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(quarters) != 1 {
+		t.Fatalf("quarter count = %d", len(quarters))
+	}
+	assertFloat(t, "raw actual shares", quarters[0].SharesOutstandingB, 1.35)
+	if quarters[0].SharesOutstandingAsOf != "2024-04-10" {
+		t.Fatalf("share-basis date changed: %q", quarters[0].SharesOutstandingAsOf)
+	}
 }
 
 func TestExtractHistoricalSharesOutstandingRequiresMatchingFilingAccession(t *testing.T) {
@@ -503,6 +541,25 @@ func TestNormalizeEPSForStockSplits(t *testing.T) {
 	normalizeEPSForSplits(eps, stockSplitEvents(gaap))
 	if eps["old"].Val != 1 || eps["middle"].Val != 2 || eps["new"].Val != 2 {
 		t.Fatalf("unexpected normalized EPS values: %#v", eps)
+	}
+}
+
+func TestNormalizeEPSAndSharesForReverseStockSplit(t *testing.T) {
+	gaap := map[string]factConcept{
+		"StockholdersEquityNoteStockSplitConversionRatio1": {Units: map[string][]fact{"pure": {
+			{End: "2026-01-15", Val: 0.1},
+		}}},
+	}
+	events := stockSplitEvents(gaap)
+	if len(events) != 1 || events[0].ratio != 0.1 {
+		t.Fatalf("reverse split event was not retained: %#v", events)
+	}
+	eps := map[string]fact{"old": {Val: 2, Filed: "2025-02-01"}}
+	shares := map[string]fact{"old": {Val: 10, Filed: "2025-02-01"}}
+	normalizeEPSForSplits(eps, events)
+	normalizeAnnualSharesForSplits(shares, events)
+	if eps["old"].Val != 20 || shares["old"].Val != 1 {
+		t.Fatalf("reverse split normalization failed: eps=%#v shares=%#v", eps, shares)
 	}
 }
 

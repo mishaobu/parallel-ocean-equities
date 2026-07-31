@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -53,26 +54,50 @@ func (p *Pipeline) Quote(ctx context.Context, ticker string, existing *model.Equ
 		return model.LiveQuote{}, err
 	}
 	quote.Ticker = ticker
+	return rebaseQuoteToEquity(quote, existing), nil
+}
+
+const exactSharesAggregateSource = "SEC CompanyFacts shares outstanding"
+
+func rebaseQuoteToEquity(quote model.LiveQuote, existing *model.Equity) model.LiveQuote {
 	// A provider-supplied market cap must not bypass the exact SEC share basis.
 	quote.MarketCapB = nil
 	quote.EnterpriseValueB = nil
 	quote.SharesOutstandingB = nil
 	quote.ShareBasisAsOf = ""
-	if existing == nil || existing.Current.SharesOutstandingB == nil || *existing.Current.SharesOutstandingB <= 0 || existing.Current.SharesOutstandingAsOf == "" {
-		return quote, nil
+	for _, field := range []string{"marketCapB", "enterpriseValueB", "sharesOutstandingB", "shareBasisAsOf"} {
+		delete(quote.FieldSources, field)
 	}
-	shares := *existing.Current.SharesOutstandingB
+	quote.Source = strings.TrimSpace(quote.Source)
+	for quote.Source == exactSharesAggregateSource || strings.HasSuffix(quote.Source, " + "+exactSharesAggregateSource) {
+		if quote.Source == exactSharesAggregateSource {
+			quote.Source = ""
+			break
+		}
+		quote.Source = strings.TrimSpace(strings.TrimSuffix(quote.Source, " + "+exactSharesAggregateSource))
+	}
+	if existing == nil || existing.Current.SharesOutstandingB == nil || *existing.Current.SharesOutstandingB <= 0 || existing.Current.SharesOutstandingAsOf == "" {
+		return quote
+	}
+	shares, splitFactor, ok := splitAdjustedActualShares(*existing.Current.SharesOutstandingB, existing.Current.SharesOutstandingAsOf, quote)
+	if !ok || !comparableQuoteShares(shares, latestEquityDilutedShares(existing)) {
+		return quote
+	}
 	quote.SharesOutstandingB = liveFloat(shares)
 	quote.ShareBasisAsOf = existing.Current.SharesOutstandingAsOf
-	setQuoteFieldSource(&quote, "sharesOutstandingB", "SEC CompanyFacts dei:EntityCommonStockSharesOutstanding instant fact")
+	shareSource := "SEC CompanyFacts dei:EntityCommonStockSharesOutstanding instant fact"
+	if math.Abs(splitFactor-1) > 1e-12 {
+		shareSource += fmt.Sprintf("; Yahoo split-adjusted x%g to current price basis", splitFactor)
+	}
+	setQuoteFieldSource(&quote, "sharesOutstandingB", shareSource)
 	setQuoteFieldSource(&quote, "shareBasisAsOf", "SEC CompanyFacts fact end date")
 	if quote.Source == "" {
-		quote.Source = "SEC CompanyFacts shares outstanding"
+		quote.Source = exactSharesAggregateSource
 	} else {
-		quote.Source += " + SEC CompanyFacts shares outstanding"
+		quote.Source += " + " + exactSharesAggregateSource
 	}
 	if quote.Price == nil || *quote.Price <= 0 {
-		return quote, nil
+		return quote
 	}
 	marketCap := *quote.Price * shares
 	quote.MarketCapB = liveFloat(marketCap)
@@ -81,7 +106,69 @@ func (p *Pipeline) Quote(ctx context.Context, ticker string, existing *model.Equ
 		quote.EnterpriseValueB = liveFloat(marketCap + *existing.Valuation.NetDebtB)
 		setQuoteFieldSource(&quote, "enterpriseValueB", "Parallel Ocean estimate: live market cap + latest persisted net debt")
 	}
-	return quote, nil
+	return quote
+}
+
+func splitAdjustedActualShares(raw float64, shareAsOf string, quote model.LiveQuote) (float64, float64, bool) {
+	if raw <= 0 || math.IsNaN(raw) || math.IsInf(raw, 0) || !quote.StockSplitCoverageComplete {
+		return 0, 0, false
+	}
+	shareDate, shareErr := time.Parse("2006-01-02", shareAsOf)
+	coverageStart, coverageErr := time.Parse("2006-01-02", quote.StockSplitCoverageStart)
+	quoteAt, quoteErr := time.Parse(time.RFC3339Nano, quote.AsOf)
+	if shareErr != nil || coverageErr != nil || quoteErr != nil || shareDate.Before(coverageStart) || shareDate.After(quoteAt) {
+		return 0, 0, false
+	}
+	factor := 1.0
+	for _, event := range quote.StockSplits {
+		eventDate, err := time.Parse("2006-01-02", event.Date)
+		if err != nil || event.Ratio <= 0 || math.IsNaN(event.Ratio) || math.IsInf(event.Ratio, 0) || eventDate.After(quoteAt) {
+			return 0, 0, false
+		}
+		if eventDate.Equal(shareDate) {
+			return 0, 0, false
+		}
+		if eventDate.After(shareDate) {
+			factor *= event.Ratio
+			if factor < 1e-6 || factor > 1e6 || math.IsNaN(factor) || math.IsInf(factor, 0) {
+				return 0, 0, false
+			}
+		}
+	}
+	adjusted := raw * factor
+	if adjusted <= 0 || math.IsNaN(adjusted) || math.IsInf(adjusted, 0) {
+		return 0, 0, false
+	}
+	return adjusted, factor, true
+}
+
+func latestEquityDilutedShares(equity *model.Equity) *float64 {
+	if equity == nil {
+		return nil
+	}
+	latestDate := ""
+	var latest *float64
+	for _, row := range equity.Annuals {
+		if row.DilutedSharesB != nil && row.PeriodEnd >= latestDate {
+			latestDate = row.PeriodEnd
+			latest = row.DilutedSharesB
+		}
+	}
+	for _, row := range equity.Quarterlies {
+		if row.DilutedSharesB != nil && row.PeriodEnd >= latestDate {
+			latestDate = row.PeriodEnd
+			latest = row.DilutedSharesB
+		}
+	}
+	return latest
+}
+
+func comparableQuoteShares(actual float64, diluted *float64) bool {
+	if diluted == nil || *diluted <= 0 {
+		return true
+	}
+	ratio := actual / *diluted
+	return ratio >= 0.8 && ratio <= 1.25
 }
 
 func (c *CompositeMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote, error) {
@@ -247,7 +334,7 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	currentQuery := url.Values{
 		"range":                {"5d"},
 		"interval":             {"1d"},
-		"events":               {"history"},
+		"events":               {"div,splits"},
 		"includeAdjustedClose": {"true"},
 		"includePrePost":       {"false"},
 	}
@@ -272,13 +359,16 @@ func (y *YahooMarket) Quote(ctx context.Context, ticker string) (model.LiveQuote
 	if err != nil {
 		return model.LiveQuote{}, err
 	}
+	quote.StockSplitCoverageComplete = quote.StockSplitCoverageComplete && historyMetadata.cacheStatus == "fresh"
+	var benchmarkMetadata yahooHistoryMetadata
+	quote.Beta5YMonthly, benchmarkMetadata = y.beta5YMonthly(ctx, ticker, history)
+	historyMetadata = mergeYahooHistoryMetadata(historyMetadata, benchmarkMetadata)
 	quote.HistoryCacheStatus = historyMetadata.cacheStatus
 	if !historyMetadata.cachedAt.IsZero() {
 		quote.HistoryCacheAsOf = historyMetadata.cachedAt.UTC().Format(time.RFC3339)
 	}
 	quote.HistoryRefreshFailureKind = historyMetadata.refreshFailureKind
 	quote.HistoryRefreshFailed = historyMetadata.refreshFailed
-	quote.Beta5YMonthly = y.beta5YMonthly(ctx, ticker, history)
 	if quote.Beta5YMonthly != nil {
 		quote.BetaBenchmark = "SPY adjusted total return"
 		setQuoteFieldSource(&quote, "beta5YMonthly", "Parallel Ocean calculation: covariance with SPY / SPY variance over 60 aligned completed monthly adjusted returns")
@@ -499,6 +589,9 @@ func buildYahooLiveQuoteWithHistory(ticker string, current, history yahooQuoteRe
 		Source:       yahooQuoteSource,
 		FieldSources: make(map[string]string),
 	}
+	quote.StockSplits, quote.StockSplitCoverageComplete = yahooStockSplitEvents(current, history, asOf)
+	quote.StockSplitCoverageStart = yahooSplitCoverageStart(history)
+	quote.StockSplitCoverageComplete = quote.StockSplitCoverageComplete && quote.StockSplitCoverageStart != ""
 	setQuoteFieldSource(&quote, "price", priceSource)
 	setQuoteFieldSource(&quote, "asOf", asOfSource)
 	setQuoteFieldSource(&quote, "marketState", "Yahoo Finance chart meta.marketState or currentTradingPeriod fallback")
@@ -590,7 +683,7 @@ func buildYahooLiveQuoteWithHistory(ticker string, current, history yahooQuoteRe
 			setQuoteFieldSource(&quote, "averageDividendYield5Year", "Parallel Ocean mean of five completed calendar-year dividend sums / year-end Yahoo closes")
 		}
 	}
-	quote.LastSplitFactor, quote.LastSplitDate = yahooLatestSplit(history, asOf)
+	quote.LastSplitFactor, quote.LastSplitDate = latestValidatedStockSplit(quote.StockSplits, asOf)
 	if quote.LastSplitDate != "" {
 		setQuoteFieldSource(&quote, "lastSplitFactor", "Yahoo Finance latest chart split event")
 		setQuoteFieldSource(&quote, "lastSplitDate", "Yahoo Finance latest chart split event date")
@@ -789,24 +882,55 @@ func sameUTCDate(left, right time.Time) bool {
 	return left.Year() == right.Year() && left.Month() == right.Month() && left.Day() == right.Day()
 }
 
-func (y *YahooMarket) beta5YMonthly(ctx context.Context, ticker string, target yahooQuoteResult) *float64 {
+func (y *YahooMarket) beta5YMonthly(ctx context.Context, ticker string, target yahooQuoteResult) (*float64, yahooHistoryMetadata) {
 	asOf := time.Now().UTC()
 	if target.Meta.RegularMarketTime > 0 {
 		asOf = time.Unix(target.Meta.RegularMarketTime, 0).UTC()
 	}
 	targetMonths := monthlyAdjustedCloses(yahooQuoteObservations(target), asOf)
 	if longestRecentMonthlyRun(targetMonths) < 61 {
-		return nil
+		return nil, yahooHistoryMetadata{}
 	}
 	if strings.EqualFold(ticker, "SPY") {
-		return liveFloat(1)
+		return liveFloat(1), yahooHistoryMetadata{}
 	}
-	benchmark, _, err := y.cachedQuoteHistory(ctx, "SPY")
+	benchmark, metadata, err := y.cachedQuoteHistory(ctx, "SPY")
 	if err != nil {
-		return nil
+		return nil, metadata
 	}
 	benchmarkMonths := monthlyAdjustedCloses(yahooQuoteObservations(benchmark), asOf)
-	return alignedMonthlyBeta(targetMonths, benchmarkMonths)
+	return alignedMonthlyBeta(targetMonths, benchmarkMonths), metadata
+}
+
+func mergeYahooHistoryMetadata(primary, benchmark yahooHistoryMetadata) yahooHistoryMetadata {
+	if yahooHistoryStatusRank(benchmark.cacheStatus) == 0 {
+		return primary
+	}
+	merged := primary
+	if yahooHistoryStatusRank(benchmark.cacheStatus) > yahooHistoryStatusRank(primary.cacheStatus) {
+		merged.cacheStatus = benchmark.cacheStatus
+	}
+	if !benchmark.cachedAt.IsZero() && (merged.cachedAt.IsZero() || benchmark.cachedAt.Before(merged.cachedAt)) {
+		merged.cachedAt = benchmark.cachedAt
+	}
+	if benchmark.refreshFailureKind != "" && (merged.refreshFailureKind == "" || yahooHistoryStatusRank(benchmark.cacheStatus) >= yahooHistoryStatusRank(primary.cacheStatus)) {
+		merged.refreshFailureKind = benchmark.refreshFailureKind
+	}
+	merged.refreshFailed = merged.refreshFailed || benchmark.refreshFailed
+	return merged
+}
+
+func yahooHistoryStatusRank(status string) int {
+	switch status {
+	case "fresh":
+		return 1
+	case "stale":
+		return 2
+	case "unavailable":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func monthlyAdjustedCloses(rows []quoteObservation, asOf time.Time) map[string]float64 {
@@ -1098,6 +1222,71 @@ func fiveYearAverageDividendYield(dividends []dividendObservation, prices []quot
 		total += value
 	}
 	return liveFloat(total / 5)
+}
+
+func yahooStockSplitEvents(current, history yahooQuoteResult, asOf time.Time) ([]model.StockSplitEvent, bool) {
+	byDate := make(map[string]model.StockSplitEvent)
+	for _, source := range []map[string]yahooSplitEvent{history.Events.Splits, current.Events.Splits} {
+		for _, raw := range source {
+			if raw.Date <= 0 || raw.Numerator <= 0 || raw.Denominator <= 0 ||
+				math.IsNaN(raw.Numerator) || math.IsInf(raw.Numerator, 0) ||
+				math.IsNaN(raw.Denominator) || math.IsInf(raw.Denominator, 0) {
+				return nil, false
+			}
+			date := time.Unix(raw.Date, 0).UTC()
+			if date.After(asOf) {
+				return nil, false
+			}
+			ratio := raw.Numerator / raw.Denominator
+			if ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+				return nil, false
+			}
+			key := date.Format("2006-01-02")
+			event := model.StockSplitEvent{Date: key, Numerator: raw.Numerator, Denominator: raw.Denominator, Ratio: ratio}
+			if prior, exists := byDate[key]; exists {
+				if math.Abs(prior.Ratio-ratio) > 1e-12 {
+					return nil, false
+				}
+				continue
+			}
+			byDate[key] = event
+		}
+	}
+	events := make([]model.StockSplitEvent, 0, len(byDate))
+	for _, event := range byDate {
+		events = append(events, event)
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Date < events[j].Date })
+	return events, true
+}
+
+func yahooSplitCoverageStart(history yahooQuoteResult) string {
+	var earliest time.Time
+	for _, timestamp := range history.Timestamps {
+		if timestamp <= 0 {
+			continue
+		}
+		observed := time.Unix(timestamp, 0).UTC()
+		if earliest.IsZero() || observed.Before(earliest) {
+			earliest = observed
+		}
+	}
+	if earliest.IsZero() {
+		return ""
+	}
+	return earliest.Format("2006-01-02")
+}
+
+func latestValidatedStockSplit(events []model.StockSplitEvent, asOf time.Time) (string, string) {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		date, err := time.Parse("2006-01-02", event.Date)
+		if err != nil || date.After(asOf) {
+			continue
+		}
+		return fmt.Sprintf("%g:%g", event.Numerator, event.Denominator), event.Date
+	}
+	return "", ""
 }
 
 func yahooLatestSplit(result yahooQuoteResult, asOf time.Time) (string, string) {
