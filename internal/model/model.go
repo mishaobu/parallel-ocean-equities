@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const StateVersion = 12
+const StateVersion = 13
 
 type AnnualPoint struct {
 	FiscalYear              int      `json:"fiscalYear"`

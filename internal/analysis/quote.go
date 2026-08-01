@@ -108,7 +108,7 @@ func rebaseQuoteToEquity(quote model.LiveQuote, existing *model.Equity) model.Li
 	}
 	marketCap := *quote.Price * shares
 	quote.MarketCapB = liveFloat(marketCap)
-	setQuoteFieldSource(&quote, "marketCapB", "Parallel Ocean intraday estimate: latest Yahoo regular-market price snapshot x latest SEC actual shares outstanding")
+	setQuoteFieldSource(&quote, "marketCapB", "Parallel Ocean market estimate: latest Yahoo regular-market price snapshot x latest SEC actual shares outstanding")
 	if existing.Valuation.NetDebtB != nil {
 		quote.EnterpriseValueB = liveFloat(marketCap + *existing.Valuation.NetDebtB)
 		setQuoteFieldSource(&quote, "enterpriseValueB", "Parallel Ocean estimate: live market cap + latest persisted net debt")

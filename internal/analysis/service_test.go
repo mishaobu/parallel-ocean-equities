@@ -236,6 +236,47 @@ func TestServiceCachesLiveQuoteForShortTTL(t *testing.T) {
 	}
 }
 
+func TestServiceStaleSparseQuoteDoesNotSuppressNewerPersistence(t *testing.T) {
+	dir := t.TempDir()
+	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{
+		AsOf:    "2026-07-31T14:00:00Z",
+		Numeric: map[string]float64{"price": 100, "moving-average-200d": 80},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{
+		AsOf:    "2026-07-31T15:00:00Z",
+		Numeric: map[string]float64{"price": 101},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	analyzer := &staticQuoteAnalyzer{quote: model.LiveQuote{Ticker: "AMZN", AsOf: "2026-07-31T14:30:00Z", Price: floatPtr(999)}}
+	service := NewService(state, analyzer).WithQuoteTTL(0)
+	if _, err := service.Quote(context.Background(), "AMZN"); err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	_, staleMarkedPersisted := service.quotePersistedAt["AMZN"]
+	service.mu.Unlock()
+	if staleMarkedPersisted {
+		t.Fatal("rejected stale observation started the persistence throttle")
+	}
+
+	analyzer.quote = model.LiveQuote{Ticker: "AMZN", AsOf: "2026-07-31T15:01:00Z", Price: floatPtr(102)}
+	if _, err := service.Quote(context.Background(), "AMZN"); err != nil {
+		t.Fatal(err)
+	}
+	got := service.Snapshot().Tickers["AMZN"].QuoteHistory
+	if len(got) == 0 || got[len(got)-1].Numeric["price"] != 102 || got[len(got)-1].LatestObservationAsOf != "2026-07-31T15:01:00Z" {
+		t.Fatalf("newer observation was not persisted after stale rejection: %#v", got)
+	}
+}
+
 func TestServiceRebasesQuoteAfterConcurrentFundamentalsRefresh(t *testing.T) {
 	dir := t.TempDir()
 	state, err := store.Open(filepath.Join(dir, "state.json"), "../../data/seed.json", 10)

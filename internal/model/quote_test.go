@@ -92,6 +92,11 @@ func TestStatisticSnapshotContentEqualTreatsNilAndEmptyMapsEqually(t *testing.T)
 	if !StatisticSnapshotContentEqual(left, right) {
 		t.Fatal("timestamp formatting and nil/empty maps should not change matched snapshot content")
 	}
+	right.LatestObservationAsOf = "2026-07-31T15:31:00Z"
+	if StatisticSnapshotContentEqual(left, right) {
+		t.Fatal("merge ordering watermark was treated as identical content")
+	}
+	right.LatestObservationAsOf = ""
 	right.Numeric["price"] = 101
 	if StatisticSnapshotContentEqual(left, right) {
 		t.Fatal("numeric correction was treated as identical content")

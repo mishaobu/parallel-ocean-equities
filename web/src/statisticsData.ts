@@ -100,6 +100,7 @@ interface Definition {
   unavailableReason?: string;
   marketSensitive?: boolean;
   currentAsOf?: (context: CurrentContext) => string | undefined;
+  currentBasis?: (context: CurrentContext) => string | undefined;
 }
 
 interface BuildContext {
@@ -180,7 +181,7 @@ function buildMetric(definition: Definition, context: BuildContext): StatisticMe
     currentSource: currentFieldSource(definition, context),
     marketSensitive,
 		currency: equityCurrency(context.equity, context.quote),
-    currentBasis: currentBasis(definition, context),
+    currentBasis: definition.currentBasis ? definition.currentBasis(context) : currentBasis(definition, context),
     unavailableReason: current === undefined ? definition.unavailableReason ?? "No defensible current observation is available from the configured sources." : undefined,
     points,
     textPoints,
@@ -303,7 +304,7 @@ function currentBasis(definition: Definition, context: BuildContext): string | u
   if (definition.group === "Valuation measures" && price !== undefined) {
     if (definition.key === "market-cap" && shares !== undefined) {
       const shareDate = context.quote?.shareBasisAsOf ?? context.equity.current.sharesOutstandingAsOf;
-			return `${formatCurrencyNumber(price, currency, true)} × ${shares.toFixed(3)}B disclosed shares${shareDate ? ` (${shareDate})` : ""}`;
+			return `${formatCurrencyNumber(price, currency, true)} × ${formatShareBasis(shares)}B disclosed shares${shareDate ? ` (${shareDate})` : ""}`;
     }
     if (definition.key === "enterprise-value") return `Live market cap + net debt${filingDate ? ` through ${filingDate}` : ""}`;
     if (definition.key === "trailing-pe") return `Live price ÷ TTM diluted EPS${filingDate ? ` through ${filingDate}` : ""}`;
@@ -317,6 +318,28 @@ function currentBasis(definition: Definition, context: BuildContext): string | u
   }
   if (definition.source === quoteSource) return context.quote?.marketState || "market snapshot";
   return context.current.basisDate ? `Fundamentals through ${context.current.basisDate}` : undefined;
+}
+
+function betaCurrentBasis(context: CurrentContext): string | undefined {
+  const current = context.quote?.beta5YMonthly ?? monthlyBeta(context.equity.prices, context.benchmark?.prices);
+  if (!finite(current)) return undefined;
+  const basisDate = latestCommonPriceDate(context.equity.prices, context.benchmark?.prices);
+  return `60 aligned completed monthly adjusted returns${basisDate ? ` through ${basisDate}` : ""}`;
+}
+
+function betaCurrentAsOf(context: CurrentContext): string | undefined {
+  return latestCommonPriceDate(context.equity.prices, context.benchmark?.prices);
+}
+
+function benchmarkCurrentBasis(context: CurrentContext): string | undefined {
+  if (!finite(latestRolling(context.benchmark?.prices, 12))) return undefined;
+  const basisDate = last(sortedPrices(context.benchmark?.prices))?.date;
+  return `S&P 500 proxy monthly closes${basisDate ? ` through ${basisDate}` : ""}`;
+}
+
+function latestCommonPriceDate(stock?: PricePoint[], benchmark?: PricePoint[]): string | undefined {
+  const benchmarkMonths = new Set(sortedPrices(benchmark).map((point) => point.date.slice(0, 7)));
+  return last(sortedPrices(stock).filter((point) => benchmarkMonths.has(point.date.slice(0, 7))))?.date;
 }
 
 const definitions: Definition[] = [
@@ -356,9 +379,9 @@ const definitions: Definition[] = [
   metric("levered-free-cash-flow", "Levered free cash flow", "Cash flow", "billions", "Vendor-defined cash flow after operating and financing obligations.", undefined, undefined, { unavailableReason: "Yahoo's vendor-defined levered FCF cannot be reproduced from standardized SEC facts without methodology assumptions." }),
 
   // Yahoo trading information (29)
-  metric("beta-5y", "Beta (5Y monthly)", "Stock price history", "ratio", "Sensitivity of 60 completed monthly total returns to the configured S&P 500 proxy (SPY); this is not Yahoo's proprietary beta series.", "covariance(stock, SPY) ÷ SPY variance", undefined, { current: (c) => c.quote?.beta5YMonthly ?? monthlyBeta(c.equity.prices, c.benchmark?.prices), source: "Yahoo adjusted closes / SPY proxy / calculated", points: emptyPoints }),
+  metric("beta-5y", "Beta (5Y monthly)", "Stock price history", "ratio", "Sensitivity of 60 completed monthly total returns to the configured S&P 500 proxy (SPY); this is not Yahoo's proprietary beta series.", "covariance(stock, SPY) ÷ SPY variance", undefined, { current: (c) => c.quote?.beta5YMonthly ?? monthlyBeta(c.equity.prices, c.benchmark?.prices), currentAsOf: betaCurrentAsOf, currentBasis: betaCurrentBasis, marketSensitive: false, nativeFrequency: "Completed monthly series", source: "Yahoo adjusted closes / SPY proxy / calculated", points: emptyPoints }),
   metric("change-52-week", "52-week change", "Stock price history", "percent", "Price change over the trailing 52 weeks.", "latest price ÷ price one year earlier − 1", undefined, { current: (c) => c.quote?.change52Week ?? c.equity.current.return1Y, source: quoteSource, points: rollingPricePoints((rows, index) => trailingReturn(rows, index, 12)) }),
-  metric("sp500-change-52-week", "S&P 500 52-week change", "Stock price history", "percent", "S&P 500 proxy price change over the trailing 52 weeks.", "benchmark price ÷ price one year earlier − 1", undefined, { current: (c) => latestRolling(c.benchmark?.prices, 12), currentAsOf: (c) => last(sortedPrices(c.benchmark?.prices))?.date, marketSensitive: true, nativeFrequency: "Monthly market series", source: "Benchmark monthly closes / calculated", points: benchmarkRollingPoints((rows, index) => trailingReturn(rows, index, 12)) }),
+  metric("sp500-change-52-week", "S&P 500 52-week change", "Stock price history", "percent", "S&P 500 proxy price change over the trailing 52 weeks.", "benchmark price ÷ price one year earlier − 1", undefined, { current: (c) => latestRolling(c.benchmark?.prices, 12), currentAsOf: (c) => last(sortedPrices(c.benchmark?.prices))?.date, currentBasis: benchmarkCurrentBasis, marketSensitive: false, nativeFrequency: "Completed monthly series", source: "Benchmark monthly closes / calculated", points: benchmarkRollingPoints((rows, index) => trailingReturn(rows, index, 12)) }),
   metric("high-52-week", "52-week high", "Stock price history", "currency", "Highest traded price in the trailing 52 weeks. History uses recorded daily-stat snapshots, never monthly-close proxies.", undefined, undefined, { current: (c) => c.quote?.high52Week ?? c.equity.current.high52Week, source: quoteSource, points: emptyPoints }),
   metric("low-52-week", "52-week low", "Stock price history", "currency", "Lowest traded price in the trailing 52 weeks. History uses recorded daily-stat snapshots, never monthly-close proxies.", undefined, undefined, { current: (c) => c.quote?.low52Week ?? c.equity.current.low52Week, source: quoteSource, points: emptyPoints }),
   metric("moving-average-50d", "50-day moving average", "Stock price history", "currency", "Average daily close over the latest 50 trading sessions.", undefined, undefined, { current: (c) => c.quote?.movingAverage50Day, source: quoteSource, points: emptyPoints }),
@@ -434,9 +457,9 @@ function buildQuarterSnapshots(equity: Equity): Snapshot[] {
   const rows = [...byQuarter.values()].sort((left, right) => fiscalQuarterOrdinal(left)! - fiscalQuarterOrdinal(right)!);
   const prices = sortedPrices(equity.prices);
   const snapshots: Snapshot[] = [];
-  for (let index = 3; index < rows.length; index++) {
-    const window = rows.slice(index - 3, index + 1);
-    if (!consecutiveQuarters(window)) continue;
+  for (let index = 0; index < rows.length; index++) {
+    const candidateWindow = rows.slice(Math.max(0, index - 3), index + 1);
+    const window = candidateWindow.length === 4 && consecutiveQuarters(candidateWindow) ? candidateWindow : undefined;
     const latestRow = rows[index];
     const priorYear = byQuarter.get(fiscalQuarterOrdinal(latestRow)! - 4);
     const previousBalance = priorYear;
@@ -446,26 +469,26 @@ function buildQuarterSnapshots(equity: Equity): Snapshot[] {
   return snapshots;
 }
 
-function snapshotFromQuarterWindow(window: QuarterlyPoint[], latestRow: QuarterlyPoint, priorYear: QuarterlyPoint | undefined, previousBalance: QuarterlyPoint | undefined, price?: number): Snapshot {
+function snapshotFromQuarterWindow(window: QuarterlyPoint[] | undefined, latestRow: QuarterlyPoint, priorYear: QuarterlyPoint | undefined, previousBalance: QuarterlyPoint | undefined, price?: number): Snapshot {
   return {
     date: latestRow.periodEnd,
     label: `FY${String(latestRow.fiscalYear).slice(-2)} ${latestRow.fiscalQuarter}`,
     basisDate: latestRow.filedAt || latestRow.periodEnd,
     source: filingSource,
     price,
-    revenueB: sumAll(window, "revenueB"),
-    grossProfitB: sumAll(window, "grossProfitB"),
-    ebitB: sumAll(window, "ebitB"),
-    ebitdaB: sumAll(window, "ebitdaB"),
-    operatingCashB: sumAll(window, "operatingCashB"),
-    fcfB: sumAll(window, "fcfB"),
-    dividendsB: sumAll(window, "dividendsB"),
-    netIncomeB: sumAll(window, "netIncomeB"),
-    dilutedEps: sumAll(window, "dilutedEps"),
+    revenueB: window ? sumAll(window, "revenueB") : undefined,
+    grossProfitB: window ? sumAll(window, "grossProfitB") : undefined,
+    ebitB: window ? sumAll(window, "ebitB") : undefined,
+    ebitdaB: window ? sumAll(window, "ebitdaB") : undefined,
+    operatingCashB: window ? sumAll(window, "operatingCashB") : undefined,
+    fcfB: window ? sumAll(window, "fcfB") : undefined,
+    dividendsB: window ? sumAll(window, "dividendsB") : undefined,
+    netIncomeB: window ? sumAll(window, "netIncomeB") : undefined,
+    dilutedEps: window ? sumAll(window, "dilutedEps") : undefined,
     sharesB: latestRow.sharesOutstandingB,
     shareBasisAsOf: latestRow.sharesOutstandingAsOf,
     shareBasisSource: latestRow.sharesOutstandingSource,
-    dilutedSharesB: averageAll(window, "dilutedSharesB"),
+    dilutedSharesB: window ? averageAll(window, "dilutedSharesB") : latestRow.dilutedSharesB,
     cashB: add(latestRow.cashB, latestRow.investmentsB) ?? latestRow.cashB,
     debtB: latestRow.debtB,
     netDebtB: latestRow.netDebtB,
@@ -559,7 +582,12 @@ function validatedSplitBasis(equity: Equity) {
     if (!validDate(event.date) || !Number.isFinite(event.numerator) || event.numerator <= 0 || !Number.isFinite(event.denominator) || event.denominator <= 0 || !Number.isFinite(event.ratio) || event.ratio <= 0) return undefined;
     const date = event.date.slice(0, 10);
     const ratio = event.numerator / event.denominator;
-    if (date < coverageStart || date > coverageEnd || Math.abs(ratio - event.ratio) > 1e-12) return undefined;
+    if (Math.abs(ratio - event.ratio) > 1e-12) return undefined;
+    // Providers can return a valid corporate-action archive that begins before
+    // the declared price-history coverage. Those older events are irrelevant
+    // to shares whose effective-date basis is inside the covered interval.
+    if (date < coverageStart) continue;
+    if (date > coverageEnd) return undefined;
     const prior = byDate.get(date);
     if (prior !== undefined && Math.abs(prior.ratio - ratio) > 1e-12) return undefined;
     byDate.set(date, { numerator: event.numerator, denominator: event.denominator, ratio });
@@ -793,6 +821,10 @@ function compactNumber(value: number, precise: boolean): string {
   if (absolute >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
   if (absolute >= 1e3) return `${(value / 1e3).toFixed(1)}K`;
   return value.toLocaleString("en-US");
+}
+
+function formatShareBasis(value: number): string {
+  return value.toLocaleString("en-US", { minimumFractionDigits: 3, maximumFractionDigits: 9 });
 }
 
 function monthlyBeta(stock?: PricePoint[], benchmark?: PricePoint[]): number | undefined {

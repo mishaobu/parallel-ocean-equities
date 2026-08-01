@@ -84,7 +84,7 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Numeric["price"] != 110 || history[0].Text["market-state"] != "REGULAR" || history[0].Source != "later fixture" {
+	if len(history) != 1 || history[0].AsOf != "2025-07-31T14:00:00Z" || history[0].Numeric["price"] != 110 || history[0].Text["market-state"] != "REGULAR" || history[0].Source != "" || history[0].Sources["price"] != "later price" {
 		t.Fatalf("later same-day observation did not replace history: %#v", history)
 	}
 
@@ -92,7 +92,7 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 1 || history[0].Numeric["price"] != 112 || history[0].Source != "corrected fixture" {
+	if len(history) != 1 || history[0].Numeric["price"] != 112 || history[0].Source != "" || history[0].Sources["price"] != "corrected price" {
 		t.Fatalf("equal-timestamp correction did not replace history: %#v", history)
 	}
 	versionAfterCorrection := stateStore.Snapshot().Version
@@ -120,8 +120,19 @@ func TestRecordQuoteSnapshotReplacesSameUTCDayAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(persisted.QuoteHistory) != 2 || persisted.QuoteHistory[0].Numeric["price"] != 112 || persisted.QuoteHistory[0].Sources["price"] != "corrected price" || persisted.QuoteHistory[0].AsOfSource != "same exchange timestamp" {
+	if len(persisted.QuoteHistory) != 2 || persisted.QuoteHistory[0].Numeric["price"] != 112 || persisted.QuoteHistory[0].Sources["price"] != "corrected price" || persisted.QuoteHistory[0].AsOfSource != "exchange timestamp" || persisted.QuoteHistory[0].LatestObservationAsOf != "2025-07-31T15:00:00Z" {
 		t.Fatalf("snapshot history was not persisted exactly: %#v", persisted.QuoteHistory)
+	}
+	updatedBeforeOutOfOrder := reopened.Snapshot().UpdatedAt
+	history, err = reopened.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{
+		AsOf:    "2025-07-31T14:30:00Z",
+		Numeric: map[string]float64{"price": 999},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history[0].Numeric["price"] != 112 || history[0].LatestObservationAsOf != "2025-07-31T15:00:00Z" || !reopened.Snapshot().UpdatedAt.Equal(updatedBeforeOutOfOrder) {
+		t.Fatalf("persisted watermark admitted an out-of-order correction after restart: %#v", history)
 	}
 }
 
@@ -169,6 +180,9 @@ func TestMergeQuoteHistoryPreservesRicherSameDaySnapshot(t *testing.T) {
 	if got.Numeric["price"] != 101 || got.Sources["price"] != "corrected price" || got.Text["market-state"] != "CLOSED" {
 		t.Fatalf("correction was not applied: %#v", got)
 	}
+	if got.AsOf != prior.AsOf || got.AsOfSource != prior.AsOfSource || got.Source != "" {
+		t.Fatalf("mixed-age snapshot inherited correction aggregate metadata: %#v", got)
+	}
 	for _, key := range []string{"moving-average-50d", "moving-average-200d", "average-volume-10d", "average-volume-3m", "beta-5y", "trailing-dividend-rate"} {
 		if got.Numeric[key] != prior.Numeric[key] || got.Sources[key] != prior.Sources[key] {
 			t.Fatalf("rich field %q was degraded: %#v", key, got)
@@ -181,26 +195,82 @@ func TestMergeQuoteHistoryPreservesRicherSameDaySnapshot(t *testing.T) {
 		Numeric: map[string]float64{"price": 102},
 	}
 	history, accepted = mergeQuoteHistory(history, laterSparse, later)
-	if !accepted || history[0].AsOf != later.Format(time.RFC3339) || history[0].Numeric["moving-average-200d"] != 80 {
+	if !accepted || history[0].AsOf != prior.AsOf || history[0].Numeric["moving-average-200d"] != 80 {
 		t.Fatalf("later sparse observation degraded same-day history: accepted=%v history=%#v", accepted, history)
 	}
-	if history[0].AsOfSource != "" {
-		t.Fatalf("stale timestamp provenance survived a source-less correction: %q", history[0].AsOfSource)
+	if history[0].LatestObservationAsOf != later.Format(time.RFC3339) {
+		t.Fatalf("latest sparse observation was not persisted as an ordering watermark: %#v", history[0])
+	}
+	if history[0].AsOfSource != prior.AsOfSource {
+		t.Fatalf("retained aggregate timestamp lost its provenance: %q", history[0].AsOfSource)
 	}
 	if history[0].Source != "" {
-		t.Fatalf("stale aggregate provenance survived a source-less correction: %q", history[0].Source)
+		t.Fatalf("mixed-provider aggregate provenance was not cleared: %q", history[0].Source)
 	}
 	if _, exists := history[0].Sources["price"]; exists {
 		t.Fatalf("stale price provenance survived a source-less correction: %#v", history[0].Sources)
 	}
 
-	nextDay := later.Add(24 * time.Hour)
-	history, accepted = mergeQuoteHistory(history, model.StatisticSnapshot{AsOf: nextDay.Format(time.RFC3339), Numeric: map[string]float64{"price": 103}}, nextDay)
+	unchanged, accepted := mergeQuoteHistory(history, laterSparse, later)
+	if accepted || !model.StatisticSnapshotContentEqual(unchanged[0], history[0]) || unchanged[0].AsOf != history[0].AsOf {
+		t.Fatalf("identical sparse observation rewrote mixed-age history: accepted=%v history=%#v", accepted, unchanged)
+	}
+	outOfOrderAt := observed.Add(15 * time.Second)
+	outOfOrder := model.StatisticSnapshot{
+		AsOf:       outOfOrderAt.Format(time.RFC3339),
+		Source:     "out-of-order provider response",
+		AsOfSource: "older exchange timestamp",
+		Numeric:    map[string]float64{"price": 999},
+	}
+	unchanged, accepted = mergeQuoteHistory(history, outOfOrder, outOfOrderAt)
+	if accepted || unchanged[0].Numeric["price"] != 102 || unchanged[0].LatestObservationAsOf != later.Format(time.RFC3339) {
+		t.Fatalf("out-of-order sparse observation crossed the persisted watermark: accepted=%v history=%#v", accepted, unchanged)
+	}
+
+	completeAt := later.Add(30 * time.Second)
+	complete := cloneStatisticSnapshot(history[0])
+	complete.AsOf = completeAt.Format(time.RFC3339)
+	complete.AsOfSource = "complete exchange timestamp"
+	complete.Source = "complete refresh"
+	complete.Numeric["price"] = 103
+	complete.Sources["price"] = "complete price"
+	history, accepted = mergeQuoteHistory(history, complete, completeAt)
+	if !accepted || history[0].AsOf != complete.AsOf || history[0].AsOfSource != complete.AsOfSource || history[0].Source != complete.Source || history[0].LatestObservationAsOf != "" {
+		t.Fatalf("complete same-day replacement did not advance aggregate metadata: accepted=%v history=%#v", accepted, history)
+	}
+
+	nextDay := completeAt.Add(24 * time.Hour)
+	history, accepted = mergeQuoteHistory(history, model.StatisticSnapshot{AsOf: nextDay.Format(time.RFC3339), Numeric: map[string]float64{"price": 104}}, nextDay)
 	if !accepted || len(history) != 2 {
 		t.Fatalf("next-day observation was not added: accepted=%v history=%#v", accepted, history)
 	}
 	if _, inherited := history[1].Numeric["moving-average-200d"]; inherited {
 		t.Fatalf("next-day sparse observation inherited a prior-day field: %#v", history[1])
+	}
+}
+
+func TestMergeQuoteHistoryClearsSharedAggregateSourceForSparseObservation(t *testing.T) {
+	priorAt := time.Date(2026, 7, 31, 17, 0, 0, 0, time.UTC)
+	prior := model.StatisticSnapshot{
+		AsOf:       priorAt.Format(time.RFC3339),
+		Source:     "shared provider",
+		AsOfSource: "exchange timestamp",
+		Numeric:    map[string]float64{"price": 100, "moving-average-200d": 80},
+	}
+	laterAt := priorAt.Add(time.Minute)
+	later := model.StatisticSnapshot{
+		AsOf:       laterAt.Format(time.RFC3339),
+		Source:     "shared provider",
+		AsOfSource: "later exchange timestamp",
+		Numeric:    map[string]float64{"price": 101},
+	}
+
+	history, accepted := mergeQuoteHistory([]model.StatisticSnapshot{prior}, later, laterAt)
+	if !accepted || len(history) != 1 {
+		t.Fatalf("sparse same-provider observation was not accepted: accepted=%v history=%#v", accepted, history)
+	}
+	if got := history[0]; got.AsOf != prior.AsOf || got.AsOfSource != prior.AsOfSource || got.Source != "" || got.LatestObservationAsOf != later.AsOf || got.Numeric["price"] != 101 || got.Numeric["moving-average-200d"] != 80 {
+		t.Fatalf("mixed-age aggregate provenance was not made conservative: %#v", got)
 	}
 }
 
