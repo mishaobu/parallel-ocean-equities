@@ -356,7 +356,9 @@ func (s *Service) executeQuoteCall(ticker string, call *quoteCall, quoter QuoteA
 			return
 		}
 		quote.History = history
-		s.markQuotePersisted(ticker, time.Now().UTC())
+		if !statisticSnapshotHistoriesEqual(existing.QuoteHistory, history) {
+			s.markQuotePersisted(ticker, time.Now().UTC())
+		}
 	} else {
 		quote.History = existing.QuoteHistory
 	}
@@ -404,6 +406,7 @@ func (s *Service) quoteRequestTimeout() time.Duration {
 
 func quoteObservationNeedsPersistence(history []model.StatisticSnapshot, quote model.LiveQuote) bool {
 	now := time.Now().UTC()
+	maximumObservedAt := now.Add(maximumQuoteFutureSkew)
 	if !quoteHasProviderObservationAt(quote, now) {
 		return false
 	}
@@ -412,8 +415,8 @@ func quoteObservationNeedsPersistence(history []model.StatisticSnapshot, quote m
 	latestIndex := -1
 	var latestAt time.Time
 	for index := range history {
-		priorAt, parseErr := time.Parse(time.RFC3339Nano, history[index].AsOf)
-		if parseErr != nil || priorAt.After(now.Add(maximumQuoteFutureSkew)) {
+		priorAt, valid := statisticSnapshotObservationTime(history[index], maximumObservedAt)
+		if !valid {
 			continue
 		}
 		if latestIndex < 0 || priorAt.After(latestAt) || priorAt.Equal(latestAt) && index > latestIndex {
@@ -430,6 +433,45 @@ func quoteObservationNeedsPersistence(history []model.StatisticSnapshot, quote m
 	// Closing values and filing-enriched market values can be corrected without
 	// changing the provider market timestamp.
 	return !model.StatisticSnapshotContentEqual(history[latestIndex], candidate)
+}
+
+// statisticSnapshotObservationTime returns the ordering time for a persisted
+// daily row. A sparse same-day merge keeps its conservative aggregate AsOf but
+// carries the latest accepted provider time as an internal ordering watermark.
+// Invalid watermarks are ignored exactly as the store's sanitizer ignores them.
+func statisticSnapshotObservationTime(snapshot model.StatisticSnapshot, maximumObservedAt time.Time) (time.Time, bool) {
+	aggregateAt, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+	if err != nil {
+		return time.Time{}, false
+	}
+	aggregateAt = aggregateAt.UTC()
+	if aggregateAt.After(maximumObservedAt) {
+		return time.Time{}, false
+	}
+	if snapshot.LatestObservationAsOf == "" {
+		return aggregateAt, true
+	}
+	latestAt, err := time.Parse(time.RFC3339Nano, snapshot.LatestObservationAsOf)
+	if err != nil {
+		return aggregateAt, true
+	}
+	latestAt = latestAt.UTC()
+	if latestAt.Before(aggregateAt) || latestAt.After(maximumObservedAt) || latestAt.Format("2006-01-02") != aggregateAt.Format("2006-01-02") {
+		return aggregateAt, true
+	}
+	return latestAt, true
+}
+
+func statisticSnapshotHistoriesEqual(left, right []model.StatisticSnapshot) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].AsOf != right[index].AsOf || !model.StatisticSnapshotContentEqual(left[index], right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func quoteHasProviderObservation(quote model.LiveQuote) bool {

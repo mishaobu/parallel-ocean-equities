@@ -531,6 +531,9 @@ func TestPipelineLiveMarketCapRequiresExactSECShareBasis(t *testing.T) {
 	if strings.Count(quote.Source, exactSharesAggregateSource) != 1 || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "us-gaap:CommonStockSharesOutstanding") || !strings.Contains(quote.FieldSources["sharesOutstandingB"], "split-adjusted x10") {
 		t.Fatalf("split provenance is not exact/idempotent: %+v", quote)
 	}
+	if strings.Contains(quote.FieldSources["marketCapB"], "intraday") || !strings.Contains(quote.FieldSources["marketCapB"], "regular-market price snapshot") {
+		t.Fatalf("market-cap provenance overstates closed-session timing: %+v", quote.FieldSources)
+	}
 	quote = rebaseQuoteToEquity(quote, equity)
 	if quote.SharesOutstandingB == nil || *quote.SharesOutstandingB != 15 || strings.Count(quote.Source, exactSharesAggregateSource) != 1 {
 		t.Fatalf("rebase was not idempotent: %+v", quote)

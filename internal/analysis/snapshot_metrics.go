@@ -197,6 +197,7 @@ func (s *Service) recordBenchmarkHistoryFailureLocked(failureID, reason string) 
 func (s *Service) seedScheduledSnapshotObservations() {
 	state := s.store.Snapshot()
 	now := time.Now().UTC()
+	maximumObservedAt := now.Add(maximumQuoteFutureSkew)
 	for ticker, equity := range state.Tickers {
 		if equity == nil || len(equity.QuoteHistory) == 0 {
 			continue
@@ -204,8 +205,8 @@ func (s *Service) seedScheduledSnapshotObservations() {
 		latestIndex := -1
 		var observedAt time.Time
 		for index := range equity.QuoteHistory {
-			candidateAt, err := time.Parse(time.RFC3339Nano, equity.QuoteHistory[index].AsOf)
-			if err != nil || candidateAt.After(now.Add(maximumQuoteFutureSkew)) {
+			candidateAt, valid := statisticSnapshotObservationTime(equity.QuoteHistory[index], maximumObservedAt)
+			if !valid {
 				continue
 			}
 			if latestIndex < 0 || candidateAt.After(observedAt) {

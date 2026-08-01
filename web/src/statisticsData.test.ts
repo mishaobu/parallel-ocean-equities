@@ -110,6 +110,33 @@ describe("statistics catalog", () => {
     expect(marketCap.currentAsOf).toBe("2026-03-02T15:30:00Z");
     expect(marketCap.currentSource).toContain("issuer-disclosed shares");
     expect(marketCap.marketSensitive).toBe(true);
+
+    const preciseShares = buildStatisticsCatalog(equity, { ...quote, sharesOutstandingB: 1.630600639 }).metrics.find((metric) => metric.key === "market-cap")!;
+    expect(preciseShares.currentBasis).toContain("1.630600639B disclosed shares");
+  });
+
+  it("labels market-history calculations with their market basis, not the filing date", () => {
+    const marketQuote = { ...quote, beta5YMonthly: 1.2 };
+    const benchmark = {
+      ...equity,
+      ticker: "SPY",
+      prices: Array.from({ length: 13 }, (_, index) => ({
+        date: new Date(Date.UTC(2025, index + 2, 0)).toISOString().slice(0, 10),
+        close: 100 + index,
+      })),
+    };
+    const catalog = buildStatisticsCatalog(equity, marketQuote, benchmark);
+    const beta = catalog.metrics.find((metric) => metric.key === "beta-5y")!;
+    const benchmarkChange = catalog.metrics.find((metric) => metric.key === "sp500-change-52-week")!;
+
+    expect(beta.currentBasis).toBe("60 aligned completed monthly adjusted returns through 2026-02-28");
+    expect(benchmarkChange.currentBasis).toBe("S&P 500 proxy monthly closes through 2026-02-28");
+    expect(beta.currentAsOf).toBe("2026-02-28");
+    expect(beta.marketSensitive).toBe(false);
+    expect(benchmarkChange.marketSensitive).toBe(false);
+    expect(beta.nativeFrequency).toBe("Completed monthly series");
+    expect(beta.currentBasis).not.toContain("Fundamentals");
+    expect(benchmarkChange.currentBasis).not.toContain("Fundamentals");
   });
 
   it("does not substitute weighted diluted shares for exact current market value", () => {
@@ -181,6 +208,41 @@ describe("statistics catalog", () => {
     expect(marketCap.points.quarter.at(-2)?.source).toContain("shares aligned x10; applied 2024-06-10 10:1");
   });
 
+  it("ignores valid split events outside the declared price-history coverage", () => {
+    const withOlderArchiveEvent: Equity = {
+      ...equity,
+      historicalPriceBasis: {
+        ...emptyHistoricalPriceBasis,
+        stockSplits: [{ date: "1982-10-28", numerator: 3, denominator: 2, ratio: 1.5 }],
+      },
+    };
+    const marketCap = buildStatisticsCatalog(withOlderArchiveEvent, quote).metrics.find((metric) => metric.key === "market-cap")!;
+    const baseline = buildStatisticsCatalog(equity, quote).metrics.find((metric) => metric.key === "market-cap")!;
+
+    expect(marketCap.points.quarter).toEqual(baseline.points.quarter);
+    expect(marketCap.points.quarter.at(-1)?.value).toBeCloseTo(882);
+  });
+
+  it("keeps point-in-time valuation history when a complete TTM window is unavailable", () => {
+    const sparseQuarters: QuarterlyPoint[] = quarterlies.slice(0, 2).map((row) => ({
+      ...row,
+      dilutedSharesB: row.sharesOutstandingB,
+    }));
+    const candidate: Equity = {
+      ...equity,
+      annuals: [],
+      quarterlies: sparseQuarters,
+      prices: [
+        { date: "2024-05-01", close: 70 },
+        { date: "2024-08-01", close: 80 },
+      ],
+    };
+    const catalog = buildStatisticsCatalog(candidate, { ...quote, history: [] });
+
+    expect(catalog.metrics.find((metric) => metric.key === "market-cap")?.points.quarter).toHaveLength(2);
+    expect(catalog.metrics.find((metric) => metric.key === "revenue")?.points.quarter).toEqual([]);
+  });
+
   it("binds named split cases to the persisted price response and fails closed on an implausible aggregate", () => {
     const cases = [
       { ticker: "NVDA", raw: 0.62, diluted: 24.8, shareDate: "2021-02-19", events: [{ date: "2021-07-20", numerator: 4, denominator: 1, ratio: 4 }, { date: "2024-06-10", numerator: 10, denominator: 1, ratio: 10 }], expected: 2480 },
@@ -236,6 +298,7 @@ describe("statistics catalog", () => {
       { ...equity, historicalPriceBasis: { ...emptyHistoricalPriceBasis, splitCoverageComplete: false } },
       { ...equity, historicalPriceBasis: { ...emptyHistoricalPriceBasis, provider: "unbound-provider" } },
       { ...equity, historicalPriceBasis: { ...emptyHistoricalPriceBasis, stockSplits: [{ date: "2025-06-01", numerator: 2, denominator: 1, ratio: 3 }] } },
+      { ...equity, historicalPriceBasis: { ...emptyHistoricalPriceBasis, stockSplits: [{ date: "2027-01-01", numerator: 2, denominator: 1, ratio: 2 }] } },
       { ...equity, quarterlies: quarterlies.map((row) => ({ ...row, sharesOutstandingSource: "unverified aggregate" })) },
       { ...equity, historicalPriceBasis: { ...emptyHistoricalPriceBasis, stockSplits: [{ date: "2026-02-01", numerator: 2, denominator: 1, ratio: 2 }] } },
     ];

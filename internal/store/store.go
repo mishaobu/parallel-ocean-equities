@@ -151,8 +151,9 @@ const (
 )
 
 // RecordQuoteSnapshot persists at most one quote-derived statistics snapshot
-// per ticker and UTC day. A later observation replaces the same day's prior
-// point; history is ordered oldest-first and bounded to ten years / 4,000 rows.
+// per ticker and UTC day. Newer same-day fields correct the prior point without
+// discarding fields absent from a sparse response; history is ordered
+// oldest-first and bounded to ten years / 4,000 rows.
 func (s *Store) RecordQuoteSnapshot(ticker string, snapshot model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
 	return s.RecordQuoteSnapshots(ticker, nil, snapshot)
 }
@@ -162,9 +163,10 @@ func (s *Store) RecordQuoteSnapshot(ticker string, snapshot model.StatisticSnaps
 // already represented in persisted history remains authoritative: backfill may
 // only add fields and matching provenance that its latest persisted observation
 // does not have, without changing any value, source, or timestamp already on
-// disk. The current point still follows the normal same-UTC-day rule: a later
-// asOf replaces an existing observation, while an equal-timestamp provider
-// correction replaces only when its payload changed.
+// disk. The current point still follows the normal same-UTC-day rule: newer
+// fields correct the existing observation, while aggregate time only advances
+// when the incoming payload covers every prior field. An equal-timestamp
+// provider correction replaces only when its payload changed.
 func (s *Store) RecordQuoteSnapshots(ticker string, monthlyBackfill []model.StatisticSnapshot, current model.StatisticSnapshot) ([]model.StatisticSnapshot, error) {
 	current, currentAt, err := validatedStatisticSnapshot(current)
 	if err != nil {
@@ -322,6 +324,8 @@ func validatedStatisticSnapshot(snapshot model.StatisticSnapshot) (model.Statist
 	}
 	observedAt = observedAt.UTC()
 	snapshot.AsOf = observedAt.Format(time.RFC3339Nano)
+	// Merge ordering is store-owned metadata, never provider input.
+	snapshot.LatestObservationAsOf = ""
 	return cloneStatisticSnapshot(snapshot), observedAt, nil
 }
 
@@ -335,16 +339,28 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 	sanitized := false
 	maximumObservedAt := time.Now().UTC().Add(quoteHistoryFutureSkew)
 	for _, snapshot := range history {
-		observed, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
-		if err != nil || observed.After(maximumObservedAt) {
+		aggregateAt, err := time.Parse(time.RFC3339Nano, snapshot.AsOf)
+		if err != nil || aggregateAt.After(maximumObservedAt) {
 			sanitized = true
 			continue
 		}
-		observed = observed.UTC()
-		day := observed.Format("2006-01-02")
+		aggregateAt = aggregateAt.UTC()
+		observed := aggregateAt
+		day := aggregateAt.Format("2006-01-02")
+		if snapshot.LatestObservationAsOf != "" {
+			latestObservation, latestErr := time.Parse(time.RFC3339Nano, snapshot.LatestObservationAsOf)
+			latestObservation = latestObservation.UTC()
+			if latestErr != nil || latestObservation.Before(observed) || latestObservation.After(maximumObservedAt) || latestObservation.Format("2006-01-02") != day {
+				snapshot.LatestObservationAsOf = ""
+				sanitized = true
+			} else {
+				snapshot.LatestObservationAsOf = latestObservation.Format(time.RFC3339Nano)
+				observed = latestObservation
+			}
+		}
 		current, exists := byDay[day]
 		if !exists || observed.After(current.observed) {
-			snapshot.AsOf = observed.Format(time.RFC3339Nano)
+			snapshot.AsOf = aggregateAt.Format(time.RFC3339Nano)
 			byDay[day] = datedStatisticSnapshot{snapshot: cloneStatisticSnapshot(snapshot), observed: observed}
 		}
 	}
@@ -356,7 +372,7 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 			acceptIncoming = false
 		} else {
 			incoming = mergeSameDayStatisticSnapshot(current.snapshot, incoming, incomingAt)
-			if incomingAt.Equal(current.observed) && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
+			if incoming.AsOf == current.snapshot.AsOf && model.StatisticSnapshotContentEqual(current.snapshot, incoming) {
 				acceptIncoming = false
 			}
 		}
@@ -395,15 +411,25 @@ func mergeQuoteHistory(history []model.StatisticSnapshot, incoming model.Statist
 // mergeSameDayStatisticSnapshot keeps a daily observation monotonic when a
 // later provider response is degraded or sparse. Fields present in the newer
 // response are authoritative corrections; absent fields retain the richest
-// value already persisted for that same UTC day. Provenance is replaced with
-// each corrected value and removed when the correction supplies none.
+// value already persisted for that same UTC day. A mixed-age row keeps the
+// prior aggregate timestamp and its provenance so retained fields never appear
+// newer than they are. Mixed aggregate source is cleared; corrected fields
+// continue to carry their incoming per-field source.
 func mergeSameDayStatisticSnapshot(current, incoming model.StatisticSnapshot, incomingAt time.Time) model.StatisticSnapshot {
 	merged := cloneStatisticSnapshot(current)
-	merged.AsOf = incomingAt.UTC().Format(time.RFC3339Nano)
-	// AsOf always comes from the incoming observation, so its provenance must
-	// move with it (or be cleared) rather than describe the retained timestamp.
-	merged.AsOfSource = incoming.AsOfSource
-	merged.Source = incoming.Source
+	if retainsPriorStatisticFields(current, incoming) {
+		merged.Source = ""
+		if latest := incomingAt.UTC().Format(time.RFC3339Nano); latest != merged.AsOf {
+			merged.LatestObservationAsOf = latest
+		} else {
+			merged.LatestObservationAsOf = ""
+		}
+	} else {
+		merged.AsOf = incomingAt.UTC().Format(time.RFC3339Nano)
+		merged.AsOfSource = incoming.AsOfSource
+		merged.Source = incoming.Source
+		merged.LatestObservationAsOf = ""
+	}
 
 	for key, value := range incoming.Numeric {
 		if merged.Numeric == nil {
@@ -422,6 +448,26 @@ func mergeSameDayStatisticSnapshot(current, incoming model.StatisticSnapshot, in
 		mergeStatisticSource(&merged, incoming, key)
 	}
 	return merged
+}
+
+func retainsPriorStatisticFields(current, incoming model.StatisticSnapshot) bool {
+	for key := range current.Numeric {
+		if _, numeric := incoming.Numeric[key]; numeric {
+			continue
+		}
+		if _, text := incoming.Text[key]; !text {
+			return true
+		}
+	}
+	for key := range current.Text {
+		if _, text := incoming.Text[key]; text {
+			continue
+		}
+		if _, numeric := incoming.Numeric[key]; !numeric {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeStatisticSource(merged *model.StatisticSnapshot, incoming model.StatisticSnapshot, key string) {

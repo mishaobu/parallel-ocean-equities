@@ -75,12 +75,16 @@ type StockSplitEvent struct {
 // Numeric and text values use the stable metric keys consumed by the statistics
 // explorer; Sources carries the exact per-field provenance for those same keys.
 type StatisticSnapshot struct {
-	AsOf       string             `json:"asOf"`
-	Source     string             `json:"source,omitempty"`
-	AsOfSource string             `json:"asOfSource,omitempty"`
-	Numeric    map[string]float64 `json:"numeric,omitempty"`
-	Text       map[string]string  `json:"text,omitempty"`
-	Sources    map[string]string  `json:"sources,omitempty"`
+	AsOf       string `json:"asOf"`
+	Source     string `json:"source,omitempty"`
+	AsOfSource string `json:"asOfSource,omitempty"`
+	// LatestObservationAsOf is an internal ordering watermark for a same-day
+	// sparse merge whose aggregate AsOf remains conservative. Consumers should
+	// continue to date the snapshot by AsOf.
+	LatestObservationAsOf string             `json:"latestObservationAsOf,omitempty"`
+	Numeric               map[string]float64 `json:"numeric,omitempty"`
+	Text                  map[string]string  `json:"text,omitempty"`
+	Sources               map[string]string  `json:"sources,omitempty"`
 }
 
 // StatisticSnapshotContentEqual compares the payload attached to an already
@@ -89,6 +93,7 @@ type StatisticSnapshot struct {
 func StatisticSnapshotContentEqual(left, right StatisticSnapshot) bool {
 	return left.Source == right.Source &&
 		left.AsOfSource == right.AsOfSource &&
+		left.LatestObservationAsOf == right.LatestObservationAsOf &&
 		maps.Equal(left.Numeric, right.Numeric) &&
 		maps.Equal(left.Text, right.Text) &&
 		maps.Equal(left.Sources, right.Sources)

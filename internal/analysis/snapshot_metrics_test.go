@@ -190,6 +190,33 @@ func TestServiceSeedsSnapshotFreshnessFromPersistedQuoteHistory(t *testing.T) {
 	}
 }
 
+func TestServiceSeedsSnapshotFreshnessFromSparseMergeWatermark(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.json"), "../../data/seed.json", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregateAt := time.Date(2026, time.July, 30, 14, 0, 0, 0, time.UTC)
+	latestAt := aggregateAt.Add(time.Hour)
+	if _, err := state.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{
+		AsOf:    aggregateAt.Format(time.RFC3339),
+		Numeric: map[string]float64{"price": 100, "moving-average-200d": 80},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.RecordQuoteSnapshot("AMZN", model.StatisticSnapshot{
+		AsOf:    latestAt.Format(time.RFC3339),
+		Numeric: map[string]float64{"price": 101},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewService(state, &snapshotMetricsAnalyzer{})
+	observation := service.Stats().ScheduledSnapshotObservations["AMZN"]
+	if !observation.LastObservation.Equal(latestAt) || !observation.LastSuccess.Equal(latestAt) {
+		t.Fatalf("sparse merge watermark was not restored as restart freshness: %+v", observation)
+	}
+}
+
 func TestQuoteObservationPersistenceRejectsFallbackAndAcceptsTimestampedCorrections(t *testing.T) {
 	prior := model.StatisticSnapshot{AsOf: "2026-07-31T15:30:00Z", Numeric: map[string]float64{"price": 100}}
 	duplicate := model.LiveQuote{AsOf: prior.AsOf}
@@ -210,6 +237,20 @@ func TestQuoteObservationPersistenceRejectsFallbackAndAcceptsTimestampedCorrecti
 	newer.FieldSources = map[string]string{"asOf": "Parallel Ocean request time fallback"}
 	if quoteObservationNeedsPersistence([]model.StatisticSnapshot{prior}, newer) {
 		t.Fatal("request-time fallback advanced durable history")
+	}
+
+	mixed := model.StatisticSnapshot{
+		AsOf:                  "2026-07-31T14:00:00Z",
+		LatestObservationAsOf: "2026-07-31T15:00:00Z",
+		Numeric:               map[string]float64{"price": 101, "moving-average-200d": 80},
+	}
+	staleBetweenTimes := model.LiveQuote{AsOf: "2026-07-31T14:30:00Z", Price: floatPtr(999)}
+	if quoteObservationNeedsPersistence([]model.StatisticSnapshot{mixed}, staleBetweenTimes) {
+		t.Fatal("observation older than the sparse-merge watermark advanced")
+	}
+	newerThanWatermark := model.LiveQuote{AsOf: "2026-07-31T15:01:00Z", Price: floatPtr(102)}
+	if !quoteObservationNeedsPersistence([]model.StatisticSnapshot{mixed}, newerThanWatermark) {
+		t.Fatal("observation newer than the sparse-merge watermark was rejected")
 	}
 }
 
